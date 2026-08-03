@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>نظام إدارة بيانات العاملين (EMIS)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+  <div class="app-container">
+    
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="logo-icon">🏢</div>
+        <h2>إدارة بيانات العاملين</h2>
+        <span class="version">الإصدار 1.0</span>
+      </div>
+      
+      <nav class="sidebar-nav">
+        <a href="#dashboard" class="nav-item active">
+          <span class="icon">📊</span>
+          لوحة التحكم
+        </a>
+        <a href="#table-builder" class="nav-item">
+          <span class="icon">🛠️</span>
+          بناء الجدول
+        </a>
+        <a href="#sorting" class="nav-item">
+          <span class="icon">🔀</span>
+          الترتيب والفلترة
+        </a>
+        <a href="#preview-export" class="nav-item">
+          <span class="icon">📄</span>
+          المعاينة والتصدير
+        </a>
+      </nav>
+      
+      <div class="sidebar-footer">
+        <p class="text-muted small">تصميم وتطوير بواسطة النظام</p>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      
+      <!-- Section 1: Dashboard -->
+      <section id="dashboard" class="section active">
+        <div class="section-header">
+          <h1>لوحة التحكم والمزامنة</h1>
+          <p class="text-muted">قم بتحديث بيانات الموظفين من نظام EMIS المركزي.</p>
+        </div>
+        
+        <div class="stats-grid">
+          <div class="stat-card card glass">
+            <div class="stat-icon">👥</div>
+            <div class="stat-info">
+              <h3>إجمالي الموظفين</h3>
+              <div class="stat-value" id="stat-emp-total">--</div>
+            </div>
+          </div>
+          <div class="stat-card card glass">
+            <div class="stat-icon">🏫</div>
+            <div class="stat-info">
+              <h3>قوة أساسية</h3>
+              <div class="stat-value" id="stat-emp-core">--</div>
+            </div>
+          </div>
+          <div class="stat-card card glass">
+            <div class="stat-icon">🔄</div>
+            <div class="stat-info">
+              <h3>منتدبين</h3>
+              <div class="stat-value" id="stat-emp-seconded">--</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card glass mt-4">
+          <h3>إعدادات الاتصال</h3>
+          <p class="text-muted mb-3">أدخل رموز المصادقة (Tokens) لتمكين المزامنة من خوادم الوزارة.</p>
+          
+          <div class="row">
+            <div class="col-6">
+              <div class="form-group">
+                <label>Bearer Token</label>
+                <input type="text" id="bearer-token" class="form-control" placeholder="ey...">
+              </div>
+            </div>
+            <div class="col-6">
+              <div class="form-group">
+                <label>UT Token</label>
+                <input type="text" id="ut-token" class="form-control" placeholder="ey...">
+              </div>
+            </div>
+          </div>
+          
+          <div class="mt-3">
+            <button class="btn btn-primary" id="btn-start-sync">
+              <span class="icon">🔄</span> بدء جلب البيانات
+            </button>
+          </div>
+          
+          <div class="progress-container mt-4" id="sync-progress-container" style="display: none;">
+            <div class="d-flex justify-content-between mb-1">
+              <span id="sync-progress-text" class="small">جاري الاتصال...</span>
+            </div>
+            <div class="progress-track">
+              <div class="progress-fill" id="sync-progress-fill" style="width: 0%"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Staff Type Filter + Employee List -->
+        <div class="card glass mt-4">
+          <div class="emp-toolbar">
+            <h3 style="margin:0;">قائمة الموظفين</h3>
+            <div class="emp-toolbar-controls">
+              <button class="btn-toggle" id="btn-sort-emp-code">ترتيب بالكود</button>
+              <div class="direction-toggle" id="staff-type-filter">
+                <label class="radio-container">
+                  <input type="radio" name="staffFilter" value="all" checked>
+                  <span class="radio-mark"></span>
+                  الكل
+                </label>
+                <label class="radio-container">
+                  <input type="radio" name="staffFilter" value="core">
+                  <span class="radio-mark"></span>
+                  قوة أساسية
+                </label>
+                <label class="radio-container">
+                  <input type="radio" name="staffFilter" value="seconded">
+                  <span class="radio-mark"></span>
+                  منتدبين
+                </label>
+              </div>
+            </div>
+          </div>
+          <div class="emp-search-bar">
+            <input type="text" id="emp-search-input" class="form-control" placeholder="بحث بالاسم أو الكود أو الرقم القومي...">
+          </div>
+          <div id="employee-list-container" class="employee-list-wrapper">
+            <p class="text-muted text-center">قم بمزامنة البيانات أولاً لعرض قائمة الموظفين.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 2: Table Builder -->
+      <section id="table-builder" class="section">
+        <div class="section-header">
+          <h1>بناء الجدول</h1>
+          <p class="text-muted">اختر الحقول التي تريد عرضها في الجدول وقم بترتيبها.</p>
+        </div>
+        <div id="table-builder-container"></div>
+      </section>
+
+      <!-- Section 3: Sorting -->
+      <section id="sorting" class="section">
+        <div class="section-header">
+          <h1>الترتيب والفلترة</h1>
+          <p class="text-muted">حدد قواعد ترتيب السجلات بناءً على الأعمدة المختارة.</p>
+        </div>
+        <div id="sorting-container"></div>
+      </section>
+
+      <!-- Section 4: Preview & Export -->
+      <section id="preview-export" class="section">
+        <div class="section-header">
+          <h1>المعاينة والتصدير</h1>
+          <p class="text-muted">راجع البيانات بالشكل النهائي قبل تصديرها إلى ملف Word.</p>
+        </div>
+        
+        <div class="row preview-export-grid">
+          <div class="col-12 col-xl-8">
+             <div id="preview-container"></div>
+          </div>
+          <div class="col-12 col-xl-4">
+             <div id="export-container"></div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+  </div>
+
+  <!-- Modal Overlay -->
+  <div id="modal-overlay" class="modal-overlay"></div>
+  
+  <!-- Toast Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Scripts -->
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>
