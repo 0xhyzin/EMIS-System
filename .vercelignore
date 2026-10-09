@@ -1,0 +1,9 @@
+data/
+node_modules/
+work/
+outputs/
+.env
+.env.*
+.git/
+*.log
+:memory:.ses
