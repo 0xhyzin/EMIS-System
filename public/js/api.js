@@ -1,5 +1,29 @@
 const BASE_URL = '';
 
+export const EXPORT_FORMATS = Object.freeze({
+  word: Object.freeze({ label: 'Word', extension: 'docx', endpoint: '/api/export/word' }),
+  excel: Object.freeze({ label: 'Excel', extension: 'xlsx', endpoint: '/api/export/excel' }),
+  pdf: Object.freeze({ label: 'PDF', extension: 'pdf', endpoint: '/api/export/pdf' }),
+});
+
+export function exportFormatInfo(format = 'word') {
+  if (!Object.hasOwn(EXPORT_FORMATS, format)) throw new Error('اختر صيغة Word أو Excel أو PDF.');
+  return EXPORT_FORMATS[format];
+}
+
+// All formats receive the same custom table and employee selection.
+export function createReportExport(config, format = 'word') {
+  const info = exportFormatInfo(format);
+  const title = config.modelId === 'hourly-contract-period-1'
+    ? 'نموذج 2 بالحصة دون سن الستين الفترة الأولى'
+    : config.title || 'كشف العاملين';
+  return {
+    url: info.endpoint,
+    filename: `${String(title).replace(/[\\/:*?"<>|\u0000-\u001F]/g, '-').trim() || 'كشف العاملين'}.${info.extension}`,
+    options: { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(config) },
+  };
+}
+
 async function fetchApi(endpoint, options = {}) {
   try {
     const response = await fetch(`${BASE_URL}${endpoint}`, {
@@ -104,34 +128,33 @@ export async function deleteTableConfig(id) {
   });
 }
 
-export async function exportWord(config) {
+export async function exportReport(config, format = 'word') {
   try {
-    const response = await fetch(`${BASE_URL}/api/export/word`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(config)
-    });
+    const report = createReportExport(config, format);
+    const response = await fetch(`${BASE_URL}${report.url}`, { credentials: 'same-origin', ...report.options });
     
     if (!response.ok) {
-      throw new Error('فشل تصدير الملف');
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.error || 'فشل تصدير الملف');
     }
     
     const blob = await response.blob();
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${config.title || 'بيانات_الموظفين'}.docx`;
+    a.download = report.filename;
     document.body.appendChild(a);
     a.click();
-    window.URL.revokeObjectURL(url);
     a.remove();
+    setTimeout(() => window.URL.revokeObjectURL(url), 30_000);
   } catch (error) {
     console.error('Export Error:', error);
     throw error;
   }
 }
+
+export const exportWord = config => exportReport(config, 'word');
+export const exportExcel = config => exportReport(config, 'excel');
 
 export async function uploadLogo(file) {
   const formData = new FormData();

@@ -1,384 +1,146 @@
 import express from 'express';
-import { 
-    Document, Packer, Paragraph, Table, TableRow, TableCell, 
-    TextRun, AlignmentType, BorderStyle, WidthType, ImageRun,
-    PageOrientation, Header, Footer, ShadingType, TableLayoutType,
-    TextDirection,
-} from 'docx';
-import fs from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath } from 'node:url';
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import * as db from '../db/database.js';
+import { selectEmployees } from '../public/js/dataModel.js';
+import { buildWordExport } from '../utils/exportWord.js';
+import { buildHourlyModelWord } from '../utils/exportHourlyModel.js';
+import { buildExcelExport, EXCEL_MIME } from '../utils/exportExcel.js';
+import { convertWordToPdf, PDF_MIME } from '../utils/exportPdf.js';
+import { DEFAULT_HOURLY_OPTIONS, getReportModel, normalizeHourlyOptions } from '../public/js/reportModels.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const bundledLogoPath = fileURLToPath(new URL('../public/assets/logo.png', import.meta.url));
 
-const router = express.Router();
-
-// Convert Western digits to Arabic-Indic digits
-function toArabicNumerals(str) {
-    if (!str) return '';
-    const map = {'0':'٠','1':'١','2':'٢','3':'٣','4':'٤','5':'٥','6':'٦','7':'٧','8':'٨','9':'٩'};
-    return String(str).replace(/[0-9]/g, d => map[d]);
+const plainObject = value => value !== null && typeof value === 'object' && !Array.isArray(value)
+    && [Object.prototype, null].includes(Object.getPrototypeOf(value));
+const bad = message => new db.DataError(message, 400);
+const safeText = (value, max) => typeof value === 'string' && value.length <= max && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value);
+function validPath(path) {
+    if (!safeText(path, 1800) || !path.trim() || /[\r\n\t]/.test(path)) return false;
+    if (path.startsWith('customField:')) {
+        try { const label = decodeURIComponent(path.slice(12)); return safeText(label, 150) && !!label.trim(); }
+        catch { return false; }
+    }
+    return path.length <= 500 && !path.split('.').some(part => !part || ['__proto__', 'prototype', 'constructor'].includes(part));
+}
+function optionalChoice(options, key, choices) {
+    if (options[key] !== undefined && !choices.includes(options[key])) throw bad('أحد اختيارات إعداد الكشف غير صحيح.');
 }
 
-function getNestedValue(obj, path) {
-    if (!path) return '';
-    const parts = path.split('.');
-    let current = obj;
-    for (const part of parts) {
-        if (current === null || current === undefined) return '';
-        if (Array.isArray(current) && current.length > 0) {
-            current = current[0][part] !== undefined ? current[0][part] : current[part];
-        } else {
-            current = current[part];
+/** One request contract for all formats; malformed choices never become 500s. */
+export function normalizeExportOptions(input = {}) {
+    if (!plainObject(input)) throw bad('إعدادات الكشف غير صحيحة.');
+    const options = { ...input };
+    if (options.title !== undefined && (!safeText(options.title, 120) || !options.title.trim() || /[\r\n\t]/.test(options.title))) throw bad('اكتب عنوانًا للكشف لا يزيد على ١٢٠ حرفًا.');
+    optionalChoice(options, 'orientation', ['landscape', 'portrait']);
+    optionalChoice(options, 'staffType', ['all', 'core', 'seconded']);
+    optionalChoice(options, 'source', ['all', 'manual', 'ministry']);
+    if (options.search !== undefined && !safeText(options.search, 500)) throw bad('نص البحث غير صحيح أو أطول من الحد المسموح.');
+    if (options.useArabicNumerals !== undefined && typeof options.useArabicNumerals !== 'boolean') throw bad('اختيار شكل الأرقام غير صحيح.');
+    const modelId = options.modelId ?? 'staff-register';
+    if (typeof modelId !== 'string' || !getReportModel(modelId)) throw bad('نوع النموذج غير معروف. حدّث الصفحة واختر نموذجًا متاحًا.');
+    options.modelId = modelId;
+    if (options.columns !== undefined) {
+        if (!Array.isArray(options.columns) || !options.columns.length || options.columns.length > 30) throw bad('اختر من عمود واحد إلى ٣٠ عمودًا لإنشاء الكشف.');
+        for (const column of options.columns) {
+            if (!plainObject(column)) throw bad('إعدادات أحد أعمدة الكشف غير صحيحة.');
+            if (column.label !== undefined && !safeText(column.label, 180)) throw bad('عنوان أحد الأعمدة غير صحيح أو أطول من الحد المسموح.');
+            if (column.type !== undefined && !['text', 'number', 'date', 'enum', 'index', 'boolean', 'merged', 'manual'].includes(column.type)) throw bad('نوع أحد الأعمدة غير صحيح.');
+            if (column.width !== undefined && (!Number.isFinite(column.width) || column.width <= 0 || column.width > 200)) throw bad('عرض أحد الأعمدة غير صحيح.');
+            for (const key of ['isMerged', 'isIndex']) if (column[key] !== undefined && typeof column[key] !== 'boolean') throw bad('إعدادات أحد أعمدة الكشف غير صحيحة.');
+            if (column.type === 'manual') {
+                if (column.isMerged || column.isIndex) throw bad('العمود اليدوي لا يمكن دمجه أو ترقيمه تلقائيًا.');
+                if (column.manualValues !== undefined && (!plainObject(column.manualValues) || Object.keys(column.manualValues).length > 5000
+                    || Object.entries(column.manualValues).some(([key, value]) => !/^-?[1-9]\d*$/.test(key) || !Number.isSafeInteger(Number(key)) || !safeText(value, 500)))) throw bad('راجع القيم المكتوبة في العمود اليدوي.');
+            } else if (column.isMerged || column.type === 'merged') {
+                const fields = column.parts === undefined ? column.fields : Array.isArray(column.parts) ? column.parts.map(part => plainObject(part) ? part.path : null) : null;
+                if (!Array.isArray(fields) || !fields.length || fields.length > 30 || fields.some(path => !validPath(path))) throw bad('اختر الحقول الصحيحة للعمود المدمج.');
+                if (column.separator !== undefined && !safeText(column.separator, 30)) throw bad('الفاصل بين حقول العمود المدمج غير صحيح.');
+            } else if (!column.isIndex && column.type !== 'index' && !validPath(column.path || column.field)) throw bad('اختر حقلًا صحيحًا لكل عمود في الكشف.');
         }
     }
-    return current || '';
-}
-
-function formatDate(dateStr, useArabicNums) {
-    if (!dateStr) return '';
-    const date = new Date(dateStr);
-    if (isNaN(date.getTime()) || date.getFullYear() < 1900) return dateStr;
-    const d = String(date.getDate()).padStart(2,'0');
-    const m = String(date.getMonth()+1).padStart(2,'0');
-    const y = date.getFullYear();
-    
-    // For Arabic, reverse to YYYY/MM/DD so Word RTL renders it as DD/MM/YYYY visually
-    const result = useArabicNums ? `${y}/${m}/${d}` : `${d}/${m}/${y}`;
-    return useArabicNums ? toArabicNumerals(result) : result;
-}
-
-function isDateValue(val) {
-    return typeof val === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(val);
-}
-
-function processText(text, useArabicNums) {
-    if (!text) return '';
-    let result = String(text);
-    if (useArabicNums) result = toArabicNumerals(result);
-    return result;
-}
-
-// ============================================
-// HEADER - repeats every page
-// ============================================
-function buildPageHeader(schoolInfo, logoPath, title) {
-    const hasLogo = fs.existsSync(logoPath);
-
-    // School info - RIGHT side, size 8pt
-    const makeSchoolLine = (text, isLast = false) => new Paragraph({
-        children: [new TextRun({
-            text: text,
-            size: 16, // 8pt
-            font: 'Traditional Arabic',
-        })],
-        alignment: AlignmentType.RIGHT,
-        rightToLeft: true,
-        spacing: { after: isLast ? 0 : 30 },
-    });
-
-    // 3-column layout: info RIGHT | spacer | logo LEFT
-    const infoCell = new TableCell({
-        children: [
-            makeSchoolLine(`محافظة ${schoolInfo.mudriaName || ''}`),
-            makeSchoolLine(`ادارة ${schoolInfo.edaraName || ''} التعليمية`),
-            makeSchoolLine(`مدرسة ${schoolInfo.schoolName || ''}`, true),
-        ],
-        width: { size: 35, type: WidthType.PERCENTAGE },
-        verticalAlign: 'center',
-        borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } },
-    });
-
-    const spacerCell = new TableCell({
-        children: [new Paragraph('')],
-        width: { size: 50, type: WidthType.PERCENTAGE },
-        borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } },
-    });
-
-    const logoCell = new TableCell({
-        children: hasLogo ? [new Paragraph({
-            children: [new ImageRun({
-                data: fs.readFileSync(logoPath),
-                transformation: { width: 65, height: 65 }
-            })],
-            alignment: AlignmentType.CENTER,
-        })] : [new Paragraph('')],
-        width: { size: 15, type: WidthType.PERCENTAGE },
-        verticalAlign: 'center',
-        borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } },
-    });
-
-    const headerTable = new Table({
-        width: { size: 100, type: WidthType.PERCENTAGE },
-        borders: {
-            top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE },
-            left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE },
-            insideHorizontal: { style: BorderStyle.NONE }, insideVertical: { style: BorderStyle.NONE },
-        },
-        // RTL row: info(right) | spacer | logo(left)
-        rows: [new TableRow({ children: [infoCell, spacerCell, logoCell] })]
-    });
-
-    // Title - centered, bold, underlined
-    const titlePara = new Paragraph({
-        children: [new TextRun({
-            text: title || '',
-            bold: true,
-            size: 28, // 14pt
-            underline: {},
-            font: 'Traditional Arabic',
-        })],
-        alignment: AlignmentType.CENTER,
-        rightToLeft: true,
-        spacing: { before: 80, after: 60 },
-    });
-
-    return new Header({
-        children: [headerTable, titlePara],
-    });
-}
-
-// ============================================
-// FOOTER - repeats every page
-// RTL order: إحصاء (right) → تقويم (center) → مدير المدرسة (left)
-// ============================================
-function buildPageFooter(footerArr) {
-    const [sig1, sig2, sig3] = footerArr; // [احصاء, تقويم, مدير]
-
-    const makeCell = (text, align) => new TableCell({
-        children: [new Paragraph({
-            children: [new TextRun({
-                text: text || '',
-                bold: true,
-                size: 20, // 10pt
-                font: 'Traditional Arabic',
-            })],
-            alignment: align,
-            rightToLeft: true,
-        })],
-        borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } },
-    });
-
-    return new Footer({
-        children: [
-            new Paragraph({
-                border: { top: { style: BorderStyle.SINGLE, size: 4, space: 4, color: '555555' } },
-                spacing: { after: 60 },
-            }),
-            new Table({
-                width: { size: 100, type: WidthType.PERCENTAGE },
-                borders: {
-                    top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE },
-                    left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE },
-                    insideHorizontal: { style: BorderStyle.NONE }, insideVertical: { style: BorderStyle.NONE },
-                },
-                rows: [new TableRow({
-                    children: [
-                        // RTL: Right = احصاء, Center = تقويم, Left = مدير
-                        makeCell(sig1 ? `احصاء: ${sig1}` : '', AlignmentType.RIGHT),
-                        makeCell(sig2 ? `تقويم: ${sig2}` : '', AlignmentType.CENTER),
-                        makeCell(sig3 ? `مدير المدرسة: ${sig3}` : '', AlignmentType.LEFT),
-                    ]
-                })]
-            })
-        ]
-    });
-}
-
-// ============================================
-// MAIN EXPORT ROUTE
-// ============================================
-router.post('/export/word', async (req, res) => {
-    try {
-        const { 
-            title, columns, sorting, footer, 
-            orientation = 'portrait', filters,
-            useArabicNumerals = false
-        } = req.body;
-        const staffType = req.body.staffType;
-        let allEmployees = db.getAllEmployees(staffType);
-        let data = allEmployees.map(emp => emp.raw_data);
-
-        // Apply filters
-        if (filters && Array.isArray(filters)) {
-            for (const filter of filters) {
-                if (!filter.path || !filter.values || filter.values.length === 0) continue;
-                data = data.filter(item => {
-                    const val = String(getNestedValue(item, filter.path)).trim();
-                    return filter.mode === 'exclude' ? !filter.values.includes(val) : filter.values.includes(val);
-                });
-            }
+    if (options.filters !== undefined) {
+        if (!Array.isArray(options.filters) || options.filters.length > 50) throw bad('قواعد الفلترة غير صحيحة.');
+        for (const filter of options.filters) {
+            if (!plainObject(filter) || !validPath(filter.path) || !Array.isArray(filter.values) || filter.values.length > 5000
+                || filter.values.some(value => !['string', 'number', 'boolean'].includes(typeof value) || !safeText(String(value), 500))
+                || (filter.mode !== undefined && !['include', 'exclude'].includes(filter.mode))) throw bad('راجع حقول وقيم قواعد الفلترة.');
         }
-
-        // Apply sorting
-        if (sorting && Array.isArray(sorting) && sorting.length > 0) {
-            for (let i = sorting.length - 1; i >= 0; i--) {
-                const rule = sorting[i];
-                const fieldPath = rule.path || rule.field;
-                if (!fieldPath) continue;
-                data.sort((a, b) => {
-                    let valA = String(getNestedValue(a, fieldPath)).trim();
-                    let valB = String(getNestedValue(b, fieldPath)).trim();
-                    if (rule.direction === 'custom' && rule.customOrder) {
-                        const iA = rule.customOrder.indexOf(valA);
-                        const iB = rule.customOrder.indexOf(valB);
-                        return (iA === -1 ? 999999 : iA) - (iB === -1 ? 999999 : iB);
-                    }
-                    if (valA === 'undefined' || valA === 'null') valA = ''; 
-                    if (valB === 'undefined' || valB === 'null') valB = '';
-                    if (isDateValue(valA) || isDateValue(valB) || rule.type === 'date') {
-                        const dA = new Date(valA).getTime() || 0;
-                        const dB = new Date(valB).getTime() || 0;
-                        return rule.direction === 'desc' ? dB - dA : dA - dB;
-                    }
-                    return rule.direction === 'desc'
-                        ? String(valB).localeCompare(String(valA), 'ar')
-                        : String(valA).localeCompare(String(valB), 'ar');
-                });
-            }
+    }
+    if (options.sorting !== undefined) {
+        if (!Array.isArray(options.sorting) || options.sorting.length > 50) throw bad('قواعد الترتيب غير صحيحة.');
+        for (const rule of options.sorting) {
+            if (!plainObject(rule) || !validPath(rule.path || rule.field) || (rule.direction !== undefined && !['asc', 'desc', 'custom'].includes(rule.direction))
+                || (rule.type !== undefined && !['text', 'number', 'date', 'enum', 'boolean'].includes(rule.type))
+                || (rule.customOrder !== undefined && (!Array.isArray(rule.customOrder) || rule.customOrder.length > 5000 || rule.customOrder.some(value => !safeText(value, 500))))) throw bad('راجع حقول واتجاه قواعد الترتيب.');
         }
+    }
+    if (options.footer !== undefined) {
+        const values = Array.isArray(options.footer) ? options.footer : plainObject(options.footer) ? [options.footer.stats, options.footer.review, options.footer.principal] : null;
+        if (!values || values.length > 9 || values.some(value => value != null && (plainObject(value)
+            ? Object.keys(value).some(key => !['label', 'name'].includes(key)) || !safeText(value.label, 120) || !safeText(value.name ?? '', 180)
+            : !safeText(value, 180)))) throw bad('راجع مسميات وأسماء التوقيعات. الحد الأقصى ٩ توقيعات.');
+    }
+    if (modelId === 'hourly-contract-period-1') {
+        if (options.modelOptions !== undefined && !plainObject(options.modelOptions)) throw bad('إعدادات نموذج الحصة غير صحيحة.');
+        try { options.modelOptions = normalizeHourlyOptions({ ...DEFAULT_HOURLY_OPTIONS, ...options.modelOptions }); }
+        catch (error) { throw bad(error.message || 'إعدادات نموذج الحصة غير صحيحة.'); }
+    }
+    return options;
+}
 
-        const schoolInfo = db.getSetting('schoolInfo') || {};
-        const logoPath = join(__dirname, '..', 'public', 'assets', 'logo.png');
+function resolveExport(input) {
+    const options = normalizeExportOptions(input);
+    // Resolve list membership from the saved list, never from client-supplied IDs.
+    delete options.memberIds;
+    if (options.listId !== undefined && options.listId !== null) {
+        const list = db.getCustomList(options.listId);
+        if (!list) throw new db.DataError('القائمة المختارة لم تعد موجودة. حدّث الصفحة واختر قائمة أخرى.', 404);
+        options.memberIds = list.memberIds;
+    }
+    const savedLogoPath = join(dirname(db.getDatabasePath()), 'assets', 'logo.png');
+    // Use the exact selector used by the preview, including search and local records.
+    const employees = selectEmployees(db.getAllEmployees(), options);
+    const context = {
+        schoolInfo: db.getSetting('schoolInfo') || {},
+        logoPath: existsSync(savedLogoPath) ? savedLogoPath : bundledLogoPath,
+    };
+    return { options, employees, context };
+}
 
-        // ---- BUILD DATA TABLE (RTL) ----
-        // For RTL: we reverse column order so Word renders them right-to-left
-        const colsForTable = [...(columns || [])].reverse();
-
-        const headerRow = new TableRow({
-            tableHeader: true,
-            children: colsForTable.map(col => new TableCell({
-                children: [new Paragraph({
-                    children: [new TextRun({ text: col.label || '', bold: true, color: 'FFFFFF', size: 20, font: 'Traditional Arabic' })],
-                    alignment: AlignmentType.CENTER,
-                    rightToLeft: true,
-                })],
-                shading: { fill: '1a1a2e', type: ShadingType.CLEAR },
-                verticalAlign: 'center',
-                margins: { top: 60, bottom: 60, left: 60, right: 60 },
-            }))
-        });
-
-        const dataRows = data.map((item, idx) => new TableRow({
-            children: colsForTable.map(col => {
-                let cellChildren = [];
-                if (col.isIndex || col.type === 'index' || col.path === 'index') {
-                    const num = useArabicNumerals ? toArabicNumerals(idx + 1) : String(idx + 1);
-                    cellChildren = [new Paragraph({
-                        children: [new TextRun({ text: num, size: 18, font: 'Traditional Arabic' })],
-                        alignment: AlignmentType.CENTER, rightToLeft: true,
-                    })];
-                } else if (col.isMerged || col.type === 'merged') {
-                    const fieldPaths = col.parts ? col.parts.map(p => p.path) : (col.fields || []);
-                    // col.separator comes from frontend: 'newline', 'space', 'dash', 'none', or custom string
-                    const sep = col.separator || 'newline';
-                    
-                    if (sep === 'newline') {
-                        // Each value on its own line
-                        cellChildren = fieldPaths.map(f => {
-                            let val = getNestedValue(item, f);
-                            if (isDateValue(String(val))) val = formatDate(String(val), useArabicNumerals);
-                            else val = processText(val, useArabicNumerals);
-                            if (!val) return null;
-                            return new Paragraph({
-                                children: [new TextRun({ text: val, size: 18, font: 'Traditional Arabic' })],
-                                alignment: AlignmentType.CENTER, rightToLeft: true,
-                            });
-                        }).filter(Boolean);
-                        if (cellChildren.length === 0) cellChildren = [new Paragraph('')];
-                    } else {
-                        // All on same line with specific separator
-                        let sepStr = sep;
-                        if (sep === 'space') sepStr = ' ';
-                        if (sep === 'dash') sepStr = ' - ';
-                        if (sep === 'none') sepStr = '';
-                        
-                        const parts = fieldPaths.map(f => {
-                            let val = getNestedValue(item, f);
-                            if (isDateValue(String(val))) val = formatDate(String(val), useArabicNumerals);
-                            else val = processText(val, useArabicNumerals);
-                            return val;
-                        }).filter(Boolean);
-                        
-                        cellChildren = [new Paragraph({
-                            children: [new TextRun({ text: parts.join(sepStr), size: 18, font: 'Traditional Arabic' })],
-                            alignment: AlignmentType.CENTER, rightToLeft: true,
-                        })];
-                    }
-                } else {
-                    const fieldPath = col.path || col.field || '';
-                    let val = getNestedValue(item, fieldPath);
-                    if (isDateValue(String(val))) {
-                        val = formatDate(String(val), useArabicNumerals);
-                    } else {
-                        val = processText(val, useArabicNumerals);
-                    }
-                    cellChildren = [new Paragraph({
-                        children: [new TextRun({ text: val || '', size: 18, font: 'Traditional Arabic' })],
-                        alignment: AlignmentType.CENTER, rightToLeft: true,
-                    })];
-                }
-                return new TableCell({
-                    children: cellChildren,
-                    shading: { fill: idx % 2 === 0 ? 'FFFFFF' : 'F5F5FA', type: ShadingType.CLEAR },
-                    verticalAlign: 'center',
-                    margins: { top: 50, bottom: 50, left: 50, right: 50 },
-                });
-            })
-        }));
-
-        const dataTable = new Table({
-            width: { size: 100, type: WidthType.PERCENTAGE },
-            rows: [headerRow, ...dataRows],
-            layout: TableLayoutType.AUTOFIT,
-            borders: {
-                top: { style: BorderStyle.SINGLE, size: 4, color: '444466' },
-                bottom: { style: BorderStyle.SINGLE, size: 4, color: '444466' },
-                left: { style: BorderStyle.SINGLE, size: 4, color: '444466' },
-                right: { style: BorderStyle.SINGLE, size: 4, color: '444466' },
-                insideHorizontal: { style: BorderStyle.SINGLE, size: 2, color: 'bbbbcc' },
-                insideVertical: { style: BorderStyle.SINGLE, size: 2, color: 'bbbbcc' },
-            },
-        });
-
-        // Footer
-        let footerArr = ['', '', ''];
-        if (Array.isArray(footer)) footerArr = footer;
-        else if (footer) footerArr = [footer.stats || '', footer.review || '', footer.principal || ''];
-
-        const doc = new Document({
-            sections: [{
-                properties: {
-                    page: {
-                        size: { orientation: orientation === 'landscape' ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT },
-                        margin: { top: 1400, right: 800, bottom: 1400, left: 800 },
-                        borders: {
-                            pageBorderTop: { style: BorderStyle.SINGLE, size: 20, space: 20, color: '333355' },
-                            pageBorderBottom: { style: BorderStyle.SINGLE, size: 20, space: 20, color: '333355' },
-                            pageBorderLeft: { style: BorderStyle.SINGLE, size: 20, space: 20, color: '333355' },
-                            pageBorderRight: { style: BorderStyle.SINGLE, size: 20, space: 20, color: '333355' },
-                        }
-                    },
-                    titlePage: false,
-                },
-                headers: { default: buildPageHeader(schoolInfo, logoPath, title) },
-                footers: { default: buildPageFooter(footerArr) },
-                children: [dataTable],
-            }]
-        });
-
-        const buffer = await Packer.toBuffer(doc);
-        const fileName = `${title || 'export'}_${Date.now()}.docx`;
-        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-        res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`);
+function downloadExport(format, pdfConverter = convertWordToPdf) {
+    return async (req, res) => {
+      try {
+        const { options, employees, context } = resolveExport(req.body === undefined ? {} : req.body);
+        let buffer = format === 'excel' ? await buildExcelExport(employees, options, context)
+            : options.modelId === 'hourly-contract-period-1'
+                ? await buildHourlyModelWord(employees, options.modelOptions, context)
+                : await buildWordExport(employees, options, context);
+        if (format === 'pdf') buffer = await pdfConverter(buffer);
+        const title = options.modelId === 'hourly-contract-period-1'
+            ? 'نموذج 2 بالحصة دون سن الستين - الفترة الأولى'
+            : String(options.title || 'أسماء العاملين بالمدرسة').slice(0, 120);
+        const extension = format === 'excel' ? 'xlsx' : format === 'pdf' ? 'pdf' : 'docx';
+        const filename = `${title.replace(/[\r\n\\/"\u0000-\u001f]/g, '').trim() || 'employees'}.${extension}`;
+        res.setHeader('Content-Type', format === 'excel' ? EXCEL_MIME : format === 'pdf' ? PDF_MIME : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        res.setHeader('Content-Disposition', `attachment; filename="employees.${extension}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+        res.setHeader('Cache-Control', 'no-store');
         res.send(buffer);
+      } catch (error) {
+        const label = format === 'excel' ? 'Excel' : format === 'pdf' ? 'PDF' : 'Word';
+        if (!error.status || error.status >= 500) console.error(`${label} export failed:`, error.message);
+        res.status(error.status || 500).json({ error: (error.status >= 400 && error.status < 500) || error.expose === true ? error.message : `تعذّر إنشاء ملف ${label}. راجع إعدادات الكشف وحاول مرة أخرى.` });
+      }
+    };
+}
 
-    } catch (error) {
-        console.error("Export Error:", error);
-        res.status(500).json({ error: error.message });
-    }
-});
+export function createExportRouter({ pdfConverter = convertWordToPdf } = {}) {
+    const router = express.Router();
+    router.post('/export/word', downloadExport('word'));
+    router.post('/export/excel', downloadExport('excel'));
+    router.post('/export/pdf', downloadExport('pdf', pdfConverter));
+    return router;
+}
 
-export default router;
+export default createExportRouter();

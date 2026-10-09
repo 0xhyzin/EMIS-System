@@ -65,8 +65,8 @@ export function parseUtToken(utToken) {
         }
 
         return { ty, sc, ed, empCode, schoolName, edaraName, mudriaName };
-    } catch (error) {
-        console.error('Error parsing UT token:', error.message);
-        throw error;
+    } catch {
+        // JSON parser messages can contain fragments of decoded personal data.
+        throw new Error('Invalid ministry account token');
     }
 }

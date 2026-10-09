@@ -1,16 +1,27 @@
 {
   "name": "emis-employee-manager",
-  "version": "1.0.0",
+  "version": "2.9.0",
   "type": "module",
   "scripts": {
     "dev": "node --watch server.js",
     "start": "node server.js",
-    "eval": "node eval.js"
+    "test": "node scripts/test.js",
+    "start:lan": "node scripts/start-lan.js"
   },
   "dependencies": {
-    "express": "^4.21.0",
-    "docx": "^9.0.0",
     "cors": "^2.8.5",
-    "multer": "^1.4.5-lts.1"
+    "docx": "^9.0.0",
+    "exceljs": "^4.4.0",
+    "express": "^4.21.0",
+    "multer": "^2.4.0",
+    "playwright-core": "^1.63.0"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "overrides": {
+    "exceljs": {
+      "uuid": "11.1.1"
+    }
   }
 }

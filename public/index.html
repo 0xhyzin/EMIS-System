@@ -1,199 +1,96 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>نظام إدارة بيانات العاملين (EMIS)</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/css/style.css">
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#234d41"><meta name="description" content="سجل العاملين بالمدرسة وإعداد الكشوف الرسمية">
+  <title>دفتر المدرسة | إدارة العاملين</title>
+  <link rel="stylesheet" href="/css/style.css?v=2.9.0">
+  <link rel="stylesheet" href="/css/assistant.css?v=2.9.0">
+  <script type="module" src="/js/app.js?v=2.9.0"></script>
 </head>
 <body>
-
-  <div class="app-container">
-    
-    <!-- Sidebar -->
-    <aside class="sidebar">
-      <div class="sidebar-header">
-        <div class="logo-icon">🏢</div>
-        <h2>إدارة بيانات العاملين</h2>
-        <span class="version">الإصدار 1.0</span>
+<a href="#main" class="skip-link">انتقل إلى المحتوى</a>
+<aside class="sidebar">
+  <a href="#employees" class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 13 16 5l12 8M7 12v15h18V12M3 27h26M13 27v-8h6v8M11 13h2m6 0h2"/></svg></span><span>دفتر المدرسة<small>شؤون العاملين</small></span></a>
+  <div class="school-label"><span class="eyebrow">مساحة العمل</span><strong id="sidebar-school">إدارة بيانات المدرسة</strong></div>
+  <nav aria-label="القائمة الرئيسية">
+    <a href="#employees" data-view="employees" class="nav-link active"><span data-icon="users"></span>سجل العاملين<span class="nav-count" id="nav-count">0</span></a>
+    <a href="#reports" data-view="reports" class="nav-link"><span data-icon="file"></span>الكشوف والتصدير</a>
+    <a href="#settings" data-view="settings" class="nav-link"><span data-icon="settings"></span>الربط والإعدادات</a>
+    <a href="#assistant" data-view="assistant" class="nav-link"><span data-icon="sparkles"></span>المساعد الذكي</a>
+  </nav>
+  <div class="sidebar-bottom"><span class="connection-dot"></span><span id="sidebar-connection">بيانات محفوظة على جهازك</span><small>مساحة مرتبة ليوم دراسي أسهل</small></div>
+</aside>
+<div class="app-shell">
+  <header class="topbar"><div class="breadcrumb">شؤون العاملين <span>/</span> <strong id="breadcrumb-view">سجل العاملين</strong></div><div class="topbar-end"><span id="today"></span><span class="avatar" aria-label="المدرسة">م</span></div></header>
+  <main id="main" tabindex="-1">
+    <div id="global-error" class="alert error" hidden role="alert"></div>
+    <section id="view-employees" class="view">
+      <div class="page-heading"><div><div class="eyebrow">كل البيانات، في مكان واحد</div><h1>سجل العاملين</h1><p>بيانات المدرسة محدثة، وكشوفها جاهزة وقت ما تحتاجها.</p></div><div class="heading-actions"><button class="button secondary" id="sync-button"><span data-icon="refresh"></span>مزامنة الوزارة</button><button class="button primary" id="add-employee"><span data-icon="plus"></span>إضافة موظف</button></div></div>
+      <div id="sync-progress" class="alert" hidden aria-live="polite"><span class="spinner"></span><span id="sync-message">جارٍ المزامنة…</span></div>
+      <details id="sync-failure-details" class="sync-failure-details" hidden><summary>عرض الموظفين الذين تعذر جلبهم وسبب التعذر</summary><ul id="sync-failure-list"></ul></details>
+      <div class="stats-grid">
+        <article class="stat-card"><div><span>إجمالي العاملين</span><strong id="stat-total">—</strong><small>المسجلون في دفتر المدرسة</small></div><span class="stat-icon" data-icon="users"></span></article>
+        <article class="stat-card"><div><span>القوة الأساسية</span><strong id="stat-core">—</strong><small>العاملون التابعون للمدرسة</small></div><span class="stat-icon" data-icon="school"></span></article>
+        <article class="stat-card"><div><span>المنتدبون</span><strong id="stat-seconded">—</strong><small>المنتدبون إلى المدرسة</small></div><span class="stat-icon" data-icon="transfer"></span></article>
+        <article class="stat-card"><div><span>إضافات يدوية</span><strong id="stat-manual">—</strong><small>محفوظة مع المزامنة العادية</small></div><span class="stat-icon sand" data-icon="edit"></span></article>
       </div>
-      
-      <nav class="sidebar-nav">
-        <a href="#dashboard" class="nav-item active">
-          <span class="icon">📊</span>
-          لوحة التحكم
-        </a>
-        <a href="#table-builder" class="nav-item">
-          <span class="icon">🛠️</span>
-          بناء الجدول
-        </a>
-        <a href="#sorting" class="nav-item">
-          <span class="icon">🔀</span>
-          الترتيب والفلترة
-        </a>
-        <a href="#preview-export" class="nav-item">
-          <span class="icon">📄</span>
-          المعاينة والتصدير
-        </a>
-      </nav>
-      
-      <div class="sidebar-footer">
-        <p class="text-muted small">تصميم وتطوير بواسطة النظام</p>
+      <section class="panel directory-panel" aria-label="قائمة العاملين">
+        <div class="custom-list-bar"><div class="list-select-field"><label for="custom-list">قائمة العرض</label><select id="custom-list"><option value="">كل العاملين بالمدرسة</option></select></div><div class="button-row"><button class="button secondary small" id="create-list">+ قائمة مخصصة</button><button class="text-button" id="edit-list" hidden>تعديل الأعضاء والاسم</button><button class="text-button danger" id="delete-list" hidden>حذف القائمة</button></div><p class="muted" id="custom-list-summary">أنشئ قائمة بأشخاص تختارهم، ثم اعرضها أو صدّرها وحدها.</p></div>
+        <div class="panel-top"><div class="tabs" role="group" aria-label="نوع العاملين"><button data-staff="all" class="tab active">جميع العاملين <span id="tab-count">0</span></button><button data-staff="core" class="tab">القوة الأساسية</button><button data-staff="seconded" class="tab">المنتدبون</button></div><button id="goto-report" class="text-button"><span data-icon="download"></span>تصدير الكشف</button></div>
+        <div class="toolbar"><div class="search-field"><span data-icon="search"></span><input id="search" type="search" autocomplete="off" aria-label="البحث في العاملين" placeholder="ابحث بالاسم، الرقم القومي، أو كود الموظف…"><kbd>/</kbd></div><label class="sr-only" for="source-filter">مصدر البيانات</label><select id="source-filter"><option value="all">كل المصادر</option><option value="ministry">موقع الوزارة</option><option value="manual">إضافة يدوية</option></select><button class="button secondary" id="open-filters" aria-expanded="false" aria-controls="filter-panel"><span data-icon="filter"></span>تصفية وترتيب<span id="filter-count"></span></button></div>
+        <div id="filter-panel" class="filter-panel" hidden><div class="filter-columns"><div><h3>تصفية البيانات</h3><p class="muted">اختر أكثر من قيمة داخل كل شرط.</p><div id="filter-rules"></div><button class="text-button" id="add-filter">+ إضافة شرط</button></div><div><h3>ترتيب النتائج</h3><p class="muted">الأولوية من أعلى إلى أسفل.</p><div id="sort-rules"></div><button class="text-button" id="add-sort">+ إضافة مستوى ترتيب</button></div></div><div class="filter-bottom"><span>تُطبق نفس الاختيارات على الكشف المُصدَّر.</span><button id="clear-filters" class="text-button">إعادة ضبط التصفية والترتيب</button></div></div>
+        <div id="active-filters" class="active-filters" hidden></div>
+        <div class="table-scroll"><table class="employee-table"><thead><tr><th scope="col" class="index-cell">م</th><th scope="col">الموظف</th><th scope="col">الرقم القومي</th><th scope="col">الوظيفة على الكادر</th><th scope="col">نوع القوة</th><th scope="col">المصدر</th><th scope="col"><span class="sr-only">الإجراءات</span></th></tr></thead><tbody id="employee-rows"></tbody></table></div>
+        <div id="employee-cards" class="employee-cards"></div><div id="empty-state" class="empty-state" hidden></div>
+        <div class="pagination"><span id="result-summary" aria-live="polite">جارٍ تحميل البيانات…</span><div><button id="previous-page" class="button small secondary" aria-label="الصفحة السابقة">السابق</button><span id="page-number">1</span><button id="next-page" class="button small secondary" aria-label="الصفحة التالية">التالي</button></div></div>
+      </section>
+      <p class="page-note"><span data-icon="shield"></span>زر القلم يعدّل السجل المحلي؛ زر تغيير بيانات البريد يحفظ الإيميل والمحمول في الوزارة.</p>
+    </section>
+    <section id="view-reports" class="view" hidden>
+      <div class="page-heading"><div><div class="eyebrow">من البيانات إلى الورق</div><h1>الكشوف والتصدير</h1><p>جهّز جدولك، ثم اختر تنزيله في Word أو Excel أو PDF بنفس الأعمدة والموظفين والترتيب.</p></div><div class="report-export-actions"><div class="export-format-field"><label for="export-format">صيغة الملف</label><select id="export-format" aria-describedby="export-format-hint"><option value="word">Word (.docx)</option><option value="excel">Excel (.xlsx)</option><option value="pdf">PDF (.pdf)</option></select></div><button id="export-word" class="button primary" type="button"><span data-icon="download"></span>تحميل ملف Word</button><p id="export-format-hint" class="muted">Word للتعديل، وExcel للجدول، وPDF للطباعة والمشاركة.</p></div></div>
+      <div class="report-context"><span><span id="report-count">0</span> موظف في الكشف · <strong id="report-list-name">كل العاملين بالمدرسة</strong> · حسب البحث والتصفية</span><a href="#employees">تعديل نطاق الكشف ←</a></div>
+      <div class="report-layout"><div class="report-controls panel">
+        <label for="report-model">نوع النموذج</label><select id="report-model" aria-label="نوع النموذج"></select>
+        <div id="staff-report-controls">
+        <label for="report-title">عنوان الكشف</label><input id="report-title" value="أسماء العاملين بالمدرسة" maxlength="120">
+        <div class="two-fields"><div><label for="orientation">اتجاه الورقة</label><select id="orientation"><option value="landscape">عرضي — مثل النموذج</option><option value="portrait">طولي</option></select></div><div><label for="numerals">شكل الأرقام</label><select id="numerals"><option value="western">123</option><option value="arabic">١٢٣</option></select></div></div>
+        <div class="section-title"><h3>أعمدة الكشف</h3><button class="text-button" id="reset-columns">النموذج الأصلي</button></div><p class="muted">من اليمين لليسار. استخدم الأسهم لتغيير الترتيب.</p><div id="report-columns"></div><div class="button-row"><button id="add-column" class="button secondary small">+ من بيانات الموظفين</button><button id="add-manual-column" class="button secondary small">+ عمود يدوي</button><button id="merge-column" class="button secondary small">دمج حقول</button></div>
+        <hr><h3>التوقيعات أسفل الصفحة</h3><p class="muted">اكتب المسمى والاسم تحته، أو أضف توقيعًا مثل وكيل شؤون التعليم.</p><div id="report-signatures"></div><button id="add-signature" type="button" class="button secondary small">+ إضافة توقيع</button>
+        <hr><h3>القوالب المحفوظة</h3><label class="sr-only" for="saved-config">اختر قالبًا</label><select id="saved-config"><option value="">اختر قالبًا محفوظًا</option></select><div class="button-row"><button id="save-config" class="button secondary small">حفظ الإعدادات كقالب</button><button id="delete-config" class="text-button danger">حذف القالب</button></div>
+        </div>
+        <div id="hourly-report-controls" hidden>
+          <p class="muted hourly-intro">نموذج ٢ بالحصة دون سن الستين — الفترة الأولى. العاملون الظاهرون في الكشف هم نتيجة البحث والتصفية أو القائمة المخصصة التي اخترتها.</p>
+          <div class="two-fields"><div><label for="hourly-period-start">من تاريخ</label><input id="hourly-period-start" type="date"></div><div><label for="hourly-period-end">إلى تاريخ</label><input id="hourly-period-end" type="date"></div></div>
+          <label for="hourly-subject">المادة</label><input id="hourly-subject" maxlength="120" placeholder="مثال: الرياضيات">
+          <div class="section-title hourly-section-title"><h3>بيانات كل معلم في النموذج</h3><span class="muted" id="hourly-people-count"></span></div>
+          <p class="muted">الاسم والرقم القومي والمؤهل من سجل الموظفين. اكتب باقي الخانات هنا، وتُحفظ لهذا النموذج فقط.</p>
+          <label class="sr-only" for="hourly-person-search">ابحث عن معلم داخل الحقول</label><input id="hourly-person-search" type="search" placeholder="ابحث عن معلم داخل الحقول" autocomplete="off">
+          <div id="hourly-people" class="hourly-people"></div>
+          <button id="save-hourly-options" class="button secondary hourly-save-button" type="button">حفظ بيانات النموذج</button>
+        </div>
+      </div><div class="report-preview-area"><div class="preview-label"><span class="connection-dot"></span>معاينة محتوى الكشف <span id="report-preview-format">الترقيم والتنسيق النهائي في Word</span></div><div class="paper-scroll"><div class="paper" id="staff-paper"><div class="paper-frame"><div class="paper-header"><div id="paper-school"></div><img id="paper-logo" src="/assets/logo.png" alt="شعار المدرسة"></div><h2 id="paper-title">أسماء العاملين بالمدرسة</h2><table id="paper-table"></table><div class="paper-footer" id="paper-footer"></div></div></div><div class="paper hourly-paper" id="hourly-paper" hidden><div class="hourly-paper-frame"><div class="hourly-paper-top"><div id="hourly-paper-school"></div><div class="hourly-paper-meta"><div>الفترة الأولى</div><strong>نموذج (2)</strong></div></div><div id="hourly-paper-subject"></div><div id="hourly-paper-period"></div><h2>المعلمين المستعان بهم من الخارج ( الحصة ) دون سن الستين</h2><table id="hourly-paper-table" dir="rtl"></table><div class="hourly-paper-signatures" id="hourly-paper-signatures"></div></div></div></div><p class="muted" id="report-preview-note">المعاينة تعرض أول 12 موظفًا. الملف يشمل كل النتائج حسب الأعمدة والترتيب المختارين.</p></div></div>
+    </section>
+    <section id="view-settings" class="view" hidden>
+      <div class="page-heading"><div><div class="eyebrow">إعدادات مساحة العمل</div><h1>الربط والإعدادات</h1><p>حساب الوزارة، بيانات ترويسة الكشف، والوصول من الموبايل.</p></div></div>
+      <div class="settings-grid"><section class="panel settings-card"><div class="section-title"><h2>حساب الوزارة</h2><span class="status-pill" id="auth-badge">غير متصل</span></div><p>سجّل بحساب Microsoft من صفحة الوزارة الرسمية. افتح صفحة العاملين بعد اختيار المدرسة لإكمال الربط.</p><div id="auth-message" class="inline-note" aria-live="polite"></div><div class="button-row"><button id="microsoft-login" class="button primary"><span class="microsoft-logo" aria-hidden="true"><i></i><i></i><i></i><i></i></span>تسجيل الدخول بـ Microsoft</button><button id="logout" class="text-button danger" hidden>تسجيل الخروج</button></div><p class="muted">يتم الربط أول مرة في نافذة متصفح على الكمبيوتر. تُحفظ الجلسة على الجهاز، وقد تطلب Microsoft تسجيل الدخول مجددًا عند انتهاء صلاحيتها.</p></section>
+      <section class="panel settings-card"><h2>الموبايل والأجهزة الأخرى</h2><p>افتح عنوان الكمبيوتر من موبايل على نفس الشبكة، ثم اربط الجهاز برمز مؤقت.</p><div id="phone-addresses" class="inline-note">شغّل وضع الشبكة لإتاحة الوصول من الموبايل.</div><button id="pair-device" class="button secondary">إنشاء رمز ربط جهاز</button><div id="pair-code" class="pair-code" hidden aria-live="polite"></div><p class="muted">رمز الربط صالح لخمس دقائق. الأجهزة المرتبطة تتذكر الدخول حتى تسجيل الخروج أو انتهاء الجلسة.</p></section>
+      <section class="panel settings-card school-settings"><h2>بيانات المدرسة في الكشف</h2><form id="school-form"><div class="three-fields"><div><label for="school-name">اسم المدرسة</label><input id="school-name" name="schoolName" maxlength="200"></div><div><label for="edara-name">الإدارة التعليمية</label><input id="edara-name" name="edaraName" maxlength="200"></div><div><label for="mudria-name">المحافظة</label><input id="mudria-name" name="mudriaName" maxlength="200"></div></div><div class="logo-setting"><img src="/assets/logo.png" alt="الشعار الحالي" id="settings-logo"><div><label for="logo-input">شعار المدرسة</label><input id="logo-input" type="file" accept="image/png"><small>صورة PNG حتى 2 ميجابايت.</small></div></div><button type="submit" class="button primary">حفظ بيانات المدرسة</button></form></section></div>
+    </section>
+    <section id="view-assistant" class="view assistant-view" hidden>
+      <div class="page-heading assistant-page-heading"><div><div class="eyebrow">مساعدة يومية لشؤون العاملين</div><h1>المساعد الذكي</h1><p>اكتبي طلبك بطريقتك، أو أرفقي صورة، وسأساعدك في بيانات المدرسة والكشوف.</p></div><div class="assistant-status-wrap"><span id="assistant-status" class="assistant-status" role="status" aria-live="polite">جارٍ فحص المساعد…</span><button type="button" id="assistant-check-status" class="text-button">إعادة فحص</button></div></div>
+      <div class="assistant-layout">
+        <aside class="assistant-guide panel" aria-label="عن المساعد"><div class="assistant-guide-mark" aria-hidden="true"><span data-icon="sparkles"></span></div><h2>اسألي عن شغلك اليوم</h2><p>يمكنكِ البحث عن موظف، مراجعة بياناته، أو تجهيز كشف. سيراجع المساعد طلبك قبل أي تغيير مؤثر.</p><button id="assistant-manage-key" type="button" class="text-button" hidden>إدارة مفتاح المساعد</button><div id="assistant-key-panel" class="assistant-key-panel" hidden><h3>ربط المساعد</h3><p>أنشئي مفتاح Groq API من <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer">صفحة المفاتيح الرسمية</a>، ثم احفظيه مرة واحدة على الكمبيوتر الرئيسي. قد تخضع الخطة المجانية لحدود استخدام.</p><form id="assistant-key-form"><label for="assistant-key">مفتاح Groq API</label><input id="assistant-key" type="password" autocomplete="off" spellcheck="false" placeholder="gsk_…" dir="ltr"><button type="submit" class="button primary small">حفظ المفتاح</button></form><button id="assistant-remove-key" type="button" class="text-button danger" hidden>حذف المفتاح المحفوظ</button></div><div class="assistant-guide-divider"></div><h3>ابدئي بمثال</h3><div class="assistant-examples"><button type="button" data-assistant-example="كم عدد العاملين في المدرسة؟">كم عدد العاملين؟</button><button type="button" data-assistant-example="ابحث عن معلم باسمه">ابحثي عن معلم</button><button type="button" data-assistant-example="ساعديني أعمل كشف">اعملي كشف</button></div><p class="assistant-privacy">نص الطلب والصورة والبيانات اللازمة للرد تُرسل إلى Groq. نص المحادثة محفوظ مؤقتًا في هذا التبويب، والصور لا تُحفظ. <a href="https://console.groq.com/docs/your-data" target="_blank" rel="noopener noreferrer">سياسة البيانات</a></p></aside>
+        <div class="assistant-chat panel">
+          <div class="assistant-chat-top"><div class="assistant-chat-avatar" aria-hidden="true"><span data-icon="sparkles"></span></div><div><strong>مساعد دفتر المدرسة</strong><small id="assistant-capability">يساعدك في البحث والكشوف والإجراءات المتاحة</small></div><button type="button" class="assistant-new-chat" id="assistant-new-chat" aria-label="بدء محادثة جديدة">محادثة جديدة</button></div>
+          <div id="assistant-messages" class="assistant-messages" role="log" aria-label="محادثة المساعد" aria-live="polite" aria-relevant="additions text"><div class="assistant-welcome"><div class="assistant-welcome-icon" aria-hidden="true"><span data-icon="sparkles"></span></div><h2>أهلاً بيكِ</h2><p>قوليلي عايزة تعملي إيه في سجل المدرسة. ممكن تكتبي طلبك أو تبعتي صورة للتوضيح.</p></div></div>
+          <div id="assistant-image-preview" class="assistant-image-preview" hidden><img id="assistant-preview-image" alt="معاينة الصورة المرفقة"><div><strong id="assistant-preview-name">صورة مرفقة</strong><small>ستُرسل الصورة مع الرسالة التالية.</small></div><button type="button" id="assistant-remove-image" class="icon-button" aria-label="إزالة الصورة">×</button></div>
+          <form id="assistant-form" class="assistant-composer"><div id="assistant-inline-error" class="assistant-inline-error" hidden role="alert"></div><div class="assistant-export-choice"><label for="assistant-export-format">صيغة الكشف الذي يجهزه المساعد</label><select id="assistant-export-format" aria-describedby="assistant-export-hint"><option value="word">Word (.docx)</option><option value="excel">Excel (.xlsx)</option><option value="pdf">PDF (.pdf)</option></select><small id="assistant-export-hint" class="muted">يمكنكِ تحديد صيغة أخرى في نص طلبك.</small></div><label class="sr-only" for="assistant-input">اكتبي رسالتك للمساعد</label><textarea id="assistant-input" rows="2" maxlength="2000" placeholder="اكتبي طلبك هنا…" enterkeyhint="send"></textarea><div class="assistant-composer-bottom"><div class="assistant-attach-wrap"><label for="assistant-image" class="assistant-attach" title="إرفاق صورة"><span data-icon="image"></span><span>إرفاق صورة</span></label><input type="file" id="assistant-image" accept="image/png,image/jpeg,image/webp" hidden><span class="assistant-composer-hint">يمكن لصق صورة هنا أيضًا؛ ستُصغّر تلقائيًا قبل الإرسال.</span></div><button type="submit" id="assistant-send" class="button primary assistant-send"><span data-icon="send"></span>إرسال</button></div></form>
+        </div>
       </div>
-    </aside>
-
-    <!-- Main Content -->
-    <main class="main-content">
-      
-      <!-- Section 1: Dashboard -->
-      <section id="dashboard" class="section active">
-        <div class="section-header">
-          <h1>لوحة التحكم والمزامنة</h1>
-          <p class="text-muted">قم بتحديث بيانات الموظفين من نظام EMIS المركزي.</p>
-        </div>
-        
-        <div class="stats-grid">
-          <div class="stat-card card glass">
-            <div class="stat-icon">👥</div>
-            <div class="stat-info">
-              <h3>إجمالي الموظفين</h3>
-              <div class="stat-value" id="stat-emp-total">--</div>
-            </div>
-          </div>
-          <div class="stat-card card glass">
-            <div class="stat-icon">🏫</div>
-            <div class="stat-info">
-              <h3>قوة أساسية</h3>
-              <div class="stat-value" id="stat-emp-core">--</div>
-            </div>
-          </div>
-          <div class="stat-card card glass">
-            <div class="stat-icon">🔄</div>
-            <div class="stat-info">
-              <h3>منتدبين</h3>
-              <div class="stat-value" id="stat-emp-seconded">--</div>
-            </div>
-          </div>
-        </div>
-
-        <div class="card glass mt-4">
-          <h3>إعدادات الاتصال</h3>
-          <p class="text-muted mb-3">أدخل رموز المصادقة (Tokens) لتمكين المزامنة من خوادم الوزارة.</p>
-          
-          <div class="row">
-            <div class="col-6">
-              <div class="form-group">
-                <label>Bearer Token</label>
-                <input type="text" id="bearer-token" class="form-control" placeholder="ey...">
-              </div>
-            </div>
-            <div class="col-6">
-              <div class="form-group">
-                <label>UT Token</label>
-                <input type="text" id="ut-token" class="form-control" placeholder="ey...">
-              </div>
-            </div>
-          </div>
-          
-          <div class="mt-3">
-            <button class="btn btn-primary" id="btn-start-sync">
-              <span class="icon">🔄</span> بدء جلب البيانات
-            </button>
-          </div>
-          
-          <div class="progress-container mt-4" id="sync-progress-container" style="display: none;">
-            <div class="d-flex justify-content-between mb-1">
-              <span id="sync-progress-text" class="small">جاري الاتصال...</span>
-            </div>
-            <div class="progress-track">
-              <div class="progress-fill" id="sync-progress-fill" style="width: 0%"></div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Staff Type Filter + Employee List -->
-        <div class="card glass mt-4">
-          <div class="emp-toolbar">
-            <h3 style="margin:0;">قائمة الموظفين</h3>
-            <div class="emp-toolbar-controls">
-              <button class="btn-toggle" id="btn-sort-emp-code">ترتيب بالكود</button>
-              <div class="direction-toggle" id="staff-type-filter">
-                <label class="radio-container">
-                  <input type="radio" name="staffFilter" value="all" checked>
-                  <span class="radio-mark"></span>
-                  الكل
-                </label>
-                <label class="radio-container">
-                  <input type="radio" name="staffFilter" value="core">
-                  <span class="radio-mark"></span>
-                  قوة أساسية
-                </label>
-                <label class="radio-container">
-                  <input type="radio" name="staffFilter" value="seconded">
-                  <span class="radio-mark"></span>
-                  منتدبين
-                </label>
-              </div>
-            </div>
-          </div>
-          <div class="emp-search-bar">
-            <input type="text" id="emp-search-input" class="form-control" placeholder="بحث بالاسم أو الكود أو الرقم القومي...">
-          </div>
-          <div id="employee-list-container" class="employee-list-wrapper">
-            <p class="text-muted text-center">قم بمزامنة البيانات أولاً لعرض قائمة الموظفين.</p>
-          </div>
-        </div>
-      </section>
-
-      <!-- Section 2: Table Builder -->
-      <section id="table-builder" class="section">
-        <div class="section-header">
-          <h1>بناء الجدول</h1>
-          <p class="text-muted">اختر الحقول التي تريد عرضها في الجدول وقم بترتيبها.</p>
-        </div>
-        <div id="table-builder-container"></div>
-      </section>
-
-      <!-- Section 3: Sorting -->
-      <section id="sorting" class="section">
-        <div class="section-header">
-          <h1>الترتيب والفلترة</h1>
-          <p class="text-muted">حدد قواعد ترتيب السجلات بناءً على الأعمدة المختارة.</p>
-        </div>
-        <div id="sorting-container"></div>
-      </section>
-
-      <!-- Section 4: Preview & Export -->
-      <section id="preview-export" class="section">
-        <div class="section-header">
-          <h1>المعاينة والتصدير</h1>
-          <p class="text-muted">راجع البيانات بالشكل النهائي قبل تصديرها إلى ملف Word.</p>
-        </div>
-        
-        <div class="row preview-export-grid">
-          <div class="col-12 col-xl-8">
-             <div id="preview-container"></div>
-          </div>
-          <div class="col-12 col-xl-4">
-             <div id="export-container"></div>
-          </div>
-        </div>
-      </section>
-
-    </main>
-
-  </div>
-
-  <!-- Modal Overlay -->
-  <div id="modal-overlay" class="modal-overlay"></div>
-  
-  <!-- Toast Container -->
-  <div id="toast-container" class="toast-container"></div>
-
-  <!-- Scripts -->
-  <script type="module" src="/js/app.js"></script>
-</body>
-</html>
+    </section>
+  </main><footer class="app-footer"><span>دفتر المدرسة · الإصدار 2.9.0</span><span>إدارة العاملين · إعداد الكشوف</span></footer>
+</div>
+<dialog id="modal" aria-labelledby="modal-title"><div id="modal-content"></div></dialog>
+<div id="toasts" class="toast-container" role="status" aria-live="polite"></div>
+</body></html>
