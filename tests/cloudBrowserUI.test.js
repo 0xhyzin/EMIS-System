@@ -1,6 +1,41 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { browserPoint, createBrowserPoller } from '../public/js/cloudBrowser.js';
+import { browserPoint, createBrowserPoller, createBrowserLogin } from '../public/js/cloudBrowser.js';
+
+const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
+const tick = () => new Promise(resolve => setImmediate(resolve));
+
+test('login immediately shows loading, blocks duplicate starts and displays the start failure', async () => {
+  const reply = deferred(), events = [];
+  let starts = 0;
+  const flow = createBrowserLogin({ prepare: async () => {}, start: () => { starts++; return reply.promise; }, close: async () => {},
+    onPending: () => events.push('loading'), onReady: () => events.push('ready'), onError: e => events.push(e.message) });
+  const attempt = flow.begin();
+  assert.deepEqual(events, ['loading']);
+  assert.equal(flow.begin(), attempt);
+  await tick(); assert.equal(starts, 1);
+  reply.reject(new Error('وزارة غير متاحة'));
+  await attempt; assert.deepEqual(events, ['loading', 'وزارة غير متاحة']);
+});
+
+test('closing during version validation prevents a login from launching later', async () => {
+  const validation = deferred(), events = [];
+  const flow = createBrowserLogin({ prepare: () => validation.promise, start: async () => events.push('start'), close: async () => events.push('close'),
+    onPending: () => {}, onReady: () => events.push('ready'), onError: () => events.push('error') });
+  flow.begin(); await tick(); const closed = flow.end(); validation.resolve(); await closed;
+  assert.deepEqual(events, []);
+});
+
+test('closing during start ignores its result and reopening waits for backend close', async () => {
+  const reply = deferred(), closing = deferred(), events = [];
+  let starts = 0;
+  const flow = createBrowserLogin({ prepare: async () => {}, start: () => { starts++; return starts === 1 ? reply.promise : Promise.resolve(); },
+    close: () => { events.push('close'); return closing.promise; }, onPending: () => {}, onReady: () => events.push('ready'), onError: () => events.push('error') });
+  flow.begin(); await tick(); flow.end(); const reopened = flow.begin();
+  reply.resolve(); await tick(); assert.equal(starts, 1); assert.deepEqual(events, ['close']);
+  closing.resolve(); await reopened; assert.equal(starts, 2); assert.deepEqual(events, ['close', 'ready']);
+  await flow.end();
+});
 
 test('mobile click positions follow the displayed screenshot rather than page coordinates', () => {
   const bounds = { left: 12, top: 250, width: 360, height: 273.6 };

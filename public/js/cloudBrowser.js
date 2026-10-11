@@ -35,7 +35,44 @@ export function createBrowserPoller({ read, apply, onError, isVisible = () => tr
   return { start, stop };
 }
 
-export function mountCloudBrowser({ request, onAuthRequired = () => {}, onClose = () => {} }) {
+// A closed dialog cannot launch after validation or display a late login response.
+export function createBrowserLogin({ prepare, start, close, onPending, onReady, onError }) {
+  let epoch = 0, pending = null, closing = Promise.resolve(), dispatched = false;
+  function begin() {
+    if (pending) return pending;
+    const current = ++epoch;
+    onPending();
+    pending = (async () => {
+      try {
+        await closing;
+        if (current !== epoch) return;
+        await prepare();
+        if (current !== epoch) return;
+        dispatched = true;
+        await start();
+        if (current === epoch) onReady();
+      } catch (error) { if (current === epoch) onError(error); }
+    })();
+    const attempt = pending;
+    attempt.finally(() => { if (pending === attempt) pending = null; });
+    return attempt;
+  }
+  function end(notifyBackend = true) {
+    epoch++;
+    const attempt = pending;
+    pending = null;
+    const previous = closing;
+    closing = (async () => {
+      await previous;
+      await attempt;
+      if (dispatched) { dispatched = false; if (notifyBackend) await close().catch(() => {}); }
+    })();
+    return closing;
+  }
+  return { begin, end };
+}
+
+export function mountCloudBrowser({ request, beforeStart = async () => {}, onAuthRequired = () => {}, onClose = () => {} }) {
   const dialog = document.getElementById('cloud-browser');
   const image = document.getElementById('cloud-browser-image');
   const status = document.getElementById('cloud-browser-status');
@@ -43,8 +80,9 @@ export function mountCloudBrowser({ request, onAuthRequired = () => {}, onClose 
   const errorBox = document.getElementById('cloud-browser-error');
   const input = document.getElementById('cloud-browser-text');
   const form = document.getElementById('cloud-browser-form');
+  const retry = document.getElementById('cloud-browser-retry');
   const controls = [...dialog.querySelectorAll('[data-browser-action], [data-browser-key], #cloud-browser-send')];
-  let viewport, imageUrl, inputController, sending = false, opened = false, closing = false;
+  let viewport, imageUrl, inputController, sending = false, opened = false;
 
   function showError(error) { errorBox.textContent = error.message || 'تعذر تحديث نافذة الوزارة. ستُعاد محاولة عرض الصفحة تلقائيًا.'; errorBox.hidden = false; }
   function revokeFrame() { if (imageUrl) URL.revokeObjectURL(imageUrl); imageUrl = null; image.removeAttribute('src'); }
@@ -66,16 +104,38 @@ export function mountCloudBrowser({ request, onAuthRequired = () => {}, onClose 
     },
     apply({ state, blob }) {
       viewport = state.available ? { width: state.width, height: state.height } : null;
-      origin.textContent = state.origin || 'جارٍ فتح الموقع الرسمي…';
-      status.textContent = state.available ? 'اضغط على الخانة داخل الصفحة، ثم اكتب بياناتك في الحقل أسفلها.' : ['opening', 'waiting'].includes(state.status) ? 'جارٍ فتح صفحة تسجيل الدخول الرسمية…' : 'المتصفح مغلق. أغلق هذه النافذة وافتح تسجيل الدخول مرة أخرى.';
+      origin.textContent = state.origin || (state.status === 'error' ? 'لم يكتمل الاتصال' : 'جارٍ فتح الموقع الرسمي…');
+      status.textContent = state.status === 'error' ? 'لم يكتمل فتح صفحة الوزارة.' : state.available ? 'اضغط على الخانة داخل الصفحة، ثم اكتب بياناتك في الحقل أسفلها.' : ['opening', 'waiting'].includes(state.status) ? 'جارٍ فتح صفحة تسجيل الدخول الرسمية…' : 'صفحة الوزارة غير مفتوحة. يمكنك إعادة المحاولة.';
       if (blob) { const previous = imageUrl; imageUrl = URL.createObjectURL(blob); image.src = imageUrl; image.hidden = false; if (previous) URL.revokeObjectURL(previous); }
       else { image.hidden = true; revokeFrame(); }
-      errorBox.hidden = true;
+      errorBox.hidden = state.status !== 'error';
+      if (state.status === 'error') showError({ message: state.message });
+      retry.hidden = state.available && state.status !== 'error';
+      form.hidden = !state.available;
       updateControls();
     },
     onError(error) {
       viewport = null; updateControls(); showError(error);
       if (error.status === 401 || error.status === 403) { closeView(false); onAuthRequired(); }
+    },
+  });
+
+  const login = createBrowserLogin({
+    prepare: beforeStart,
+    start: () => request('/auth/microsoft/start', { method: 'POST', body: '{}' }),
+    close: () => request('/auth/browser/close', { method: 'POST', body: '{}' }),
+    onPending() {
+      poller.stop(); viewport = null; updateControls(); errorBox.hidden = true;
+      retry.hidden = false; retry.disabled = true;
+      image.hidden = true; revokeFrame(); form.hidden = true;
+      origin.textContent = 'جارٍ الاتصال بالموقع الرسمي…';
+      status.textContent = 'جارٍ تجهيز نافذة تسجيل الدخول… قد يستغرق الاتصال بضع ثوانٍ.';
+    },
+    onReady() { retry.disabled = false; form.hidden = false; poller.start(); },
+    onError(error) {
+      retry.disabled = false; status.textContent = 'تعذر فتح صفحة الوزارة.';
+      origin.textContent = 'لم يكتمل الاتصال'; showError(error);
+      if (error.status === 401 || error.status === 403) { closeView(); onAuthRequired(); }
     },
   });
 
@@ -91,19 +151,17 @@ export function mountCloudBrowser({ request, onAuthRequired = () => {}, onClose 
     if (!opened) return;
     opened = false; poller.stop(); inputController?.abort(); input.value = ''; viewport = null; revokeFrame();
     if (dialog.open) dialog.close();
-    if (notifyBackend && !closing) {
-      closing = true;
-      request('/auth/browser/close', { method: 'POST', body: '{}' }).catch(() => {}).finally(() => { closing = false; });
-    }
+    login.end(notifyBackend);
     onClose();
   }
   function open() {
     if (opened) return;
     opened = true; inputController = new AbortController(); viewport = null; sending = false;
     errorBox.hidden = true; image.hidden = true; input.value = ''; origin.textContent = 'جارٍ فتح الموقع الرسمي…'; status.textContent = 'جارٍ تحميل صفحة الوزارة…';
-    updateControls(); dialog.showModal(); poller.start();
+    updateControls(); dialog.showModal(); login.begin();
   }
 
+  retry.addEventListener('click', () => login.begin());
   document.getElementById('cloud-browser-close').addEventListener('click', () => closeView());
   dialog.addEventListener('cancel', event => { event.preventDefault(); closeView(); });
   dialog.addEventListener('close', () => { if (opened) closeView(); });

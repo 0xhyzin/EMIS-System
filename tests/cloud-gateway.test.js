@@ -28,7 +28,7 @@ test('public cloud shell, status and rejected logins never wake compute or expos
     let starts = 0;
     const port = await listen(t, createVercelHandler({ env, resolveBackend: async () => { starts++; throw new Error('Should not wake'); } }));
     const page = await call(port, '/');
-    assert.equal(page.status, 200); assert.match(page.body, /2\.10\.0/);
+    assert.equal(page.status, 200); assert.match(page.body, /2\.10\.1/);
     assert.equal((await call(port, '/js/cloudBrowser.js')).status, 200);
     assert.equal(JSON.parse((await call(port, '/api/auth/status')).body).needsLogin, true);
     assert.equal((await call(port, '/api/employees')).status, 401);

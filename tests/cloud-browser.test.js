@@ -102,6 +102,16 @@ test('remote input is narrowly validated, bounded and never written to the crede
     ]) assert.throws(() => validateBrowserInput(invalid), error => error.statusCode === 400);
 });
 
+test('a failed Ministry navigation exposes a safe reason without browser diagnostics or login data', async t => {
+    const { bridge, page } = fixture(t);
+    page.goto = async () => { throw new Error('private-browser-diagnostic'); };
+    await assert.rejects(bridge.open(), error => error.statusCode === 503);
+    const state = bridge.getBrowserState();
+    assert.equal(state.status, 'error');
+    assert.match(state.message, /تعذر الوصول لموقع الوزارة/);
+    assert.equal(JSON.stringify(state).includes('private-browser-diagnostic'), false);
+});
+
 test('frame calls are coalesced and the queue rejects a flood while browser operations are pending', async t => {
     const { bridge, page } = fixture(t);
     await bridge.open();

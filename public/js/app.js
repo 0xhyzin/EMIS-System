@@ -564,7 +564,10 @@ function showPairing() {
     catch (error) { $('pair-error').textContent = error.message; } finally { button.disabled = false; }
   });
 }
-$('microsoft-login').addEventListener('click', event => busy(event.currentTarget, async () => { const result = await send('/auth/microsoft/start', 'POST'); await refreshAuth(); if (result.browserView) cloudBrowser.open(); toast('أكمل الدخول في نافذة الوزارة ثم افتح قائمة العاملين.'); }));
+$('microsoft-login').addEventListener('click', event => {
+  if (state.auth?.cloudAccess) { cloudBrowser.open(); return; }
+  busy(event.currentTarget, async () => { await send('/auth/microsoft/start', 'POST'); await refreshAuth(); toast('أكمل الدخول في نافذة الوزارة ثم افتح قائمة العاملين.'); });
+});
 $('logout').addEventListener('click', () => {
   const localLogout = state.auth?.localAccess && !state.auth?.cloudAccess;
   modal(localLogout ? 'فصل حساب الوزارة' : 'تسجيل خروج الجهاز', `<div class="modal-body"><p>${localLogout ? 'سيتم مسح جلسة الوزارة المحفوظة وإلغاء ربط الأجهزة. بيانات العاملين في قاعدة المدرسة ستبقى محفوظة.' : state.auth?.cloudAccess ? 'سيخرج هذا الجهاز فقط. تظل بيانات المدرسة وحساب الوزارة محفوظة، ويمكنك الدخول مرة أخرى بكلمة المرور أو رمز ربط.' : 'ستحتاج إلى رمز ربط جديد للدخول من هذا الجهاز.'}</p></div>`, { footer: '<button class="button secondary" data-close>إلغاء</button><button class="button danger-button" id="confirm-logout">تسجيل الخروج</button>' });
@@ -616,7 +619,7 @@ function chooseSyncMode() {
 }
 $('sync-button').addEventListener('click', () => { if (!state.auth?.ministry?.connected) { location.hash = 'settings'; toast('اربط حساب الوزارة أولًا، أو افتح تسجيل الدخول لتجديد الجلسة.'); } else chooseSyncMode(); });
 const assistantChat = mountAssistantChat({ request, send, isLocalAccess: () => Boolean(state.auth?.localAccess || state.auth?.ownerAccess), getExportFormat: () => state.exportFormat, onDataChanged: loadData, toast });
-const cloudBrowser = mountCloudBrowser({ request, onAuthRequired: () => refreshAuth().catch(() => {}), onClose: () => refreshAuth().catch(() => {}) });
+const cloudBrowser = mountCloudBrowser({ request, beforeStart: verifyAppVersion, onAuthRequired: () => refreshAuth().catch(() => {}), onClose: () => refreshAuth().catch(() => {}) });
 function navigate() {
   const view = ['employees', 'reports', 'settings', 'assistant'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'employees';
   document.querySelectorAll('.view').forEach(section => { section.hidden = section.id !== `view-${view}`; });

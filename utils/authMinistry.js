@@ -289,8 +289,9 @@ export class MinistryBridge extends EventEmitter {
     getBrowserState() {
         const page = this.page;
         const origin = page && !page.isClosed() ? officialBrowserOrigin(page.url()) : null;
+        const { status, message } = this.getStatus();
         return { available: !!(this.cloudMode && this.context && origin), origin,
-            status: this.getStatus().status, ...CLOUD_VIEWPORT };
+            status, ...(status === 'error' ? { message } : {}), ...CLOUD_VIEWPORT };
     }
 
     enqueueBrowserOperation(operation) {

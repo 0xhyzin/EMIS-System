@@ -4,9 +4,9 @@
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#234d41"><meta name="description" content="سجل العاملين بالمدرسة وإعداد الكشوف الرسمية">
   <title>دفتر المدرسة | إدارة العاملين</title>
-  <link rel="stylesheet" href="/css/style.css?v=2.10.0">
-  <link rel="stylesheet" href="/css/assistant.css?v=2.10.0">
-  <script type="module" src="/js/app.js?v=2.10.0"></script>
+  <link rel="stylesheet" href="/css/style.css?v=2.10.1">
+  <link rel="stylesheet" href="/css/assistant.css?v=2.10.1">
+  <script type="module" src="/js/app.js?v=2.10.1"></script>
 </head>
 <body>
 <a href="#main" class="skip-link">انتقل إلى المحتوى</a>
@@ -89,7 +89,7 @@
         </div>
       </div>
     </section>
-  </main><footer class="app-footer"><span>دفتر المدرسة · الإصدار 2.10.0</span><span>إدارة العاملين · إعداد الكشوف</span></footer>
+  </main><footer class="app-footer"><span>دفتر المدرسة · الإصدار 2.10.1</span><span>إدارة العاملين · إعداد الكشوف</span></footer>
 </div>
 <dialog id="modal" aria-labelledby="modal-title"><div id="modal-content"></div></dialog>
 <dialog id="cloud-browser" class="cloud-browser-dialog" aria-labelledby="cloud-browser-title">
@@ -99,6 +99,7 @@
     <div class="cloud-browser-toolbar" role="group" aria-label="التحكم في صفحة الوزارة"><button type="button" class="button secondary small" data-browser-action="back">رجوع</button><button type="button" class="button secondary small" data-browser-action="reload">تحديث الصفحة</button><button type="button" class="button secondary small" data-browser-action="portal">صفحة الوزارة</button><button type="button" class="button secondary small" data-browser-action="wheel" data-browser-scroll="-500">أعلى الصفحة</button><button type="button" class="button secondary small" data-browser-action="wheel" data-browser-scroll="500">أسفل الصفحة</button></div>
     <p id="cloud-browser-status" class="muted" role="status">جارٍ تحميل صفحة الوزارة…</p>
     <div id="cloud-browser-error" class="alert error" role="alert" hidden></div>
+    <button id="cloud-browser-retry" type="button" class="button secondary small" hidden>إعادة محاولة الاتصال بالوزارة</button>
     <div class="cloud-browser-screen"><img id="cloud-browser-image" alt="صفحة الوزارة المفتوحة؛ اضغط على الخانة التي تريد الكتابة فيها" tabindex="0" draggable="false" hidden></div>
     <form id="cloud-browser-form" class="cloud-browser-input" autocomplete="off"><label for="cloud-browser-text">اضغط على الخانة في الصفحة أولًا، ثم اكتب هنا وأرسل</label><div class="cloud-browser-type"><input id="cloud-browser-text" type="text" maxlength="2000" autocomplete="off" spellcheck="false" dir="auto"><button id="cloud-browser-send" type="submit" class="button primary">إرسال إلى الخانة</button></div><div class="cloud-browser-input-tools"><label><input id="cloud-browser-secret" type="checkbox">إخفاء النص عند كتابة كلمة المرور</label><div class="button-row" role="group" aria-label="مفاتيح صفحة الوزارة"><button type="button" class="button secondary small" data-browser-key="Tab">الخانة التالية</button><button type="button" class="button secondary small" data-browser-key="Shift+Tab">الخانة السابقة</button><button type="button" class="button secondary small" data-browser-key="Control+A">تحديد النص كله</button><button type="button" class="button secondary small" data-browser-key="Backspace">مسح</button><button type="button" class="button secondary small" data-browser-key="Enter">Enter / متابعة</button></div></div><p class="muted">تُرسل الكتابة إلى الخانة المحددة في الموقع الرسمي، ويُمسح حقل الكتابة بعد الإرسال. إغلاق النافذة يحتفظ بجلسة الوزارة المحفوظة.</p></form>
   </div>
