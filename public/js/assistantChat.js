@@ -260,13 +260,13 @@ export function mountAssistantChat({ request, send, isLocalAccess, getExportForm
       everChecked = true;
       badge.textContent = available ? 'المساعد جاهز' : (configured ? 'المساعد غير متاح مؤقتًا' : 'المساعد يحتاج ربطًا');
       badge.classList.toggle('unavailable', !available);
-      byId('assistant-capability').textContent = status.message || (available ? 'مستعد للمساعدة في سجل المدرسة' : 'احفظي مفتاح الخدمة على الكمبيوتر الرئيسي');
+      byId('assistant-capability').textContent = status.message || (available ? 'مستعد للمساعدة في سجل المدرسة' : 'احفظي مفتاح الخدمة من إعدادات المساعد');
       const local = Boolean(isLocalAccess?.());
       keyPanel.hidden = !local || configured;
       manageKey.hidden = !local || !configured;
       removeKey.hidden = !configured;
       if (configured) keyInput.placeholder = 'أدخلي مفتاحًا جديدًا للاستبدال';
-      if (!available && !configured && !local) showError('لازم حفظ مفتاح المساعد مرة واحدة من الكمبيوتر الرئيسي قبل استخدامه على الموبايل.');
+      if (!available && !configured && !local) showError('يلزم أن يحفظ مدير البرنامج مفتاح المساعد مرة واحدة قبل استخدامه على الأجهزة الأخرى.');
       else if (available) clearError();
       updateSend();
       return status;
@@ -362,7 +362,7 @@ export function mountAssistantChat({ request, send, isLocalAccess, getExportForm
     try {
       await send('/assistant/settings', 'PUT', { apiKey });
       keyInput.value = '';
-      toast('تم حفظ مفتاح المساعد على الكمبيوتر الرئيسي.');
+      toast('تم حفظ مفتاح المساعد.');
       await refreshStatus();
     } catch (error) { showError(error.message || 'تعذر حفظ المفتاح.'); }
     finally { button.disabled = false; }

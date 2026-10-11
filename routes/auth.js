@@ -1,7 +1,8 @@
 import express from 'express';
-import { randomInt } from 'node:crypto';
+import { randomInt, createHash } from 'node:crypto';
 import { AuthStore } from '../utils/authStore.js';
 import { MinistryBridge, findBrowser } from '../utils/authMinistry.js';
+import { ownerPasswordHashIsValid, verifyOwnerPassword, signCloudSession, verifyCloudSession, signCloudPairing, verifyCloudPairing } from '../utils/cloudSession.js';
 
 const COOKIE = 'emis_session';
 const SESSION_TTL = 30 * 24 * 60 * 60 * 1000;
@@ -24,28 +25,43 @@ export function requestIsLocal(req) {
     } catch { return false; }
 }
 
-function configuredOrigin(env) {
-    if (!env.APP_ORIGIN) return null;
-    const origin = new URL(env.APP_ORIGIN);
+function configuredOrigin(env, key = 'APP_ORIGIN') {
+    if (!env[key]) return null;
+    const origin = new URL(env[key]);
     if (!['https:', 'http:'].includes(origin.protocol) || origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash) {
-        throw new Error('APP_ORIGIN must be an HTTP(S) origin without a path, query or credentials.');
+        throw new Error(`${key} must be an HTTP(S) origin without a path, query or credentials.`);
     }
     if (origin.protocol !== 'https:' && !LOOPBACK_HOSTS.has(origin.hostname) && env.ALLOW_INSECURE_LAN !== 'true') {
-        throw new Error('Use HTTPS for APP_ORIGIN, or explicitly set ALLOW_INSECURE_LAN=true on a trusted private network.');
+        throw new Error(`Use HTTPS for ${key}, or explicitly set ALLOW_INSECURE_LAN=true on a trusted private network.`);
     }
     return origin;
 }
 
 export function createAuth({ dataDir, env = process.env, store: providedStore, bridge: providedBridge, now = () => Date.now() }) {
-    const store = providedStore || new AuthStore(dataDir, { now });
-    const bridge = providedBridge || new MinistryBridge({ dataDir, store, now, browserPath: findBrowser(env) });
+    const cloudMode = env.EMIS_CLOUD === 'true';
     const origin = configuredOrigin(env);
+    const previewOrigin = configuredOrigin(env, 'EMIS_PREVIEW_ORIGIN');
+    const origins = [origin, previewOrigin].filter(Boolean);
+    if (cloudMode) {
+        if (!origin || origins.some(item => item.protocol !== 'https:')) throw new Error('Cloud mode requires HTTPS APP_ORIGIN and HTTPS EMIS_PREVIEW_ORIGIN when provided.');
+        if (!ownerPasswordHashIsValid(env.EMIS_OWNER_PASSWORD_HASH)) throw new Error('Cloud mode requires a valid EMIS_OWNER_PASSWORD_HASH.');
+        // Validate configuration at startup, before exposing a login endpoint.
+        signCloudSession({ token: 'a'.repeat(43), expiresAt: 1 }, env.EMIS_SESSION_SECRET);
+    }
+    const store = providedStore || new AuthStore(dataDir, { now });
+    const bridge = providedBridge || new MinistryBridge({ dataDir, store, now, cloudMode, browserPath: findBrowser(env) });
     const router = express.Router();
     let failures = [];
 
+    function requestOrigin(req) {
+        const configured = origins.find(item => req.headers.host?.toLowerCase() === item.host.toLowerCase());
+        if (configured) return configured;
+        if (!cloudMode && requestIsLocal(req)) return new URL(`${req.socket.encrypted ? 'https' : 'http'}://${req.headers.host}`);
+        return null;
+    }
+
     function trustedHost(req) {
-        if (requestIsLocal(req)) return true;
-        return !!origin && req.headers.host?.toLowerCase() === origin.host.toLowerCase();
+        return !!requestOrigin(req);
     }
 
     function requireSameOrigin(req, res, next) {
@@ -53,33 +69,52 @@ export function createAuth({ dataDir, env = process.env, store: providedStore, b
         if (req.headers['sec-fetch-site'] && !['same-origin', 'none'].includes(req.headers['sec-fetch-site'])) {
             return res.status(403).json({ error: 'طلب من موقع خارجي غير مسموح.' });
         }
-        const expected = requestIsLocal(req) ? `${req.socket.encrypted ? 'https' : 'http'}://${req.headers.host}` : origin.origin;
+        const expected = requestOrigin(req).origin;
         if (req.headers.origin && req.headers.origin !== expected) return res.status(403).json({ error: 'مصدر الطلب غير مسموح.' });
         next();
     }
 
+    function sessionClaim(req) {
+        const cookie = cookies(req)[COOKIE];
+        return cloudMode ? verifyCloudSession(cookie, env.EMIS_SESSION_SECRET, now()) : { token: cookie };
+    }
+
     function identity(req) {
-        if (requestIsLocal(req)) return { local: true, user: { provider: 'local', name: 'هذا الكمبيوتر' }, expiresAt: null };
+        if (!cloudMode && requestIsLocal(req)) return { local: true, owner: true, user: { provider: 'local', name: 'هذا الكمبيوتر' }, expiresAt: null };
         if (!trustedHost(req)) return null;
-        const session = store.getSession(cookies(req)[COOKIE]);
-        return session ? { ...session, local: false } : null;
+        const claim = sessionClaim(req);
+        if (!claim) return null;
+        const session = store.getSession(claim.token);
+        if (!session || (cloudMode && (session.expiresAt !== claim.expiresAt || !['cloud-owner', 'paired'].includes(session.user?.provider)))) return null;
+        return { ...session, local: false, owner: cloudMode && session.user.provider === 'cloud-owner', sessionKey: createHash('sha256').update(claim.token).digest('hex') };
     }
 
     function requireAccess(req, res, next) {
         const auth = identity(req);
-        if (!auth) return res.status(401).json({ error: 'اربط هذا الجهاز برمز من الكمبيوتر لفتح بيانات المدرسة.', needsPairing: true });
+        if (!auth) return res.status(401).json(cloudMode
+            ? { error: 'سجّل الدخول لفتح بيانات المدرسة.', cloudAccess: true, needsLogin: true, needsPairing: false }
+            : { error: 'اربط هذا الجهاز برمز من الكمبيوتر لفتح بيانات المدرسة.', needsPairing: true });
         req.auth = auth;
         res.setHeader('Cache-Control', 'no-store');
         next();
     }
 
-    function localOnly(req, res, next) {
-        if (!requestIsLocal(req)) return res.status(403).json({ error: 'افتح هذا الإجراء على الكمبيوتر الذي يشغّل البرنامج.' });
+    function requireOwner(req, res, next) {
+        const auth = identity(req);
+        if (!auth?.owner) return res.status(cloudMode && !auth ? 401 : 403).json(cloudMode
+            ? { error: 'هذا الإجراء يحتاج تسجيل الدخول بحساب صاحب المدرسة.', needsLogin: !auth }
+            : { error: 'افتح هذا الإجراء على الكمبيوتر الذي يشغّل البرنامج.' });
+        req.auth = auth;
         next();
     }
 
     function cookieOptions(req) {
-        return { httpOnly: true, secure: !!req.socket.encrypted || (!requestIsLocal(req) && origin?.protocol === 'https:'), sameSite: 'strict', path: '/' };
+        return { httpOnly: true, secure: cloudMode || !!req.socket.encrypted || (!requestIsLocal(req) && requestOrigin(req)?.protocol === 'https:'), sameSite: 'strict', path: '/' };
+    }
+
+    function setSessionCookie(req, res, session) {
+        const cookie = cloudMode ? signCloudSession({ token: session.token, expiresAt: session.expiresAt }, env.EMIS_SESSION_SECRET) : session.token;
+        res.cookie(COOKIE, cookie, { ...cookieOptions(req), maxAge: SESSION_TTL });
     }
 
     const safe = handler => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(error => {
@@ -91,38 +126,63 @@ export function createAuth({ dataDir, env = process.env, store: providedStore, b
 
     router.get('/status', (req, res) => {
         const auth = identity(req);
-        const publicStatus = { authenticated: !!auth, localAccess: !!auth?.local, needsPairing: !auth, user: auth?.user || null };
+        const publicStatus = { authenticated: !!auth, localAccess: !!auth?.local, ownerAccess: !!auth?.owner,
+            cloudAccess: cloudMode, needsLogin: cloudMode && !auth, needsPairing: !cloudMode && !auth, user: auth?.user || null };
         if (!auth) return res.json(publicStatus);
         res.json({
             ...publicStatus,
             sessionExpiresAt: auth.expiresAt,
             browserAvailable: !!bridge.browserPath,
             ministry: bridge.getStatus(),
-            pairingAvailable: auth.local && !!origin && !LOOPBACK_HOSTS.has(origin.hostname),
-            phoneUrl: auth.local && origin ? origin.origin : null,
+            pairingAvailable: auth.owner && !!origin && !LOOPBACK_HOSTS.has(origin.hostname),
+            phoneUrl: auth.owner && requestOrigin(req) && !LOOPBACK_HOSTS.has(requestOrigin(req).hostname) ? requestOrigin(req).origin
+                : auth.owner && origin ? origin.origin : null,
         });
     });
 
-    router.post('/microsoft/start', localOnly, safe(async (req, res) => {
-        await bridge.open({ refresh: true });
-        res.json({ success: true, ministry: bridge.getStatus() });
+    router.post('/login', safe(async (req, res) => {
+        if (!cloudMode) return res.status(404).json({ error: 'هذا المسار متاح في النسخة المستضافة فقط.' });
+        const rawAttempts = store.getSecret('cloud-owner-login-attempts');
+        const attempts = (Array.isArray(rawAttempts) ? rawAttempts : [])
+            .filter(time => Number.isSafeInteger(time) && time > now() - 5 * 60_000);
+        if (attempts.length >= 10) {
+            res.setHeader('Retry-After', '300');
+            return res.status(429).json({ error: 'محاولات كثيرة. انتظر خمس دقائق ثم حاول مجددًا.' });
+        }
+        // Count attempts before the password calculation; the persistent limit survives restarts.
+        store.putSecret('cloud-owner-login-attempts', [...attempts, now()]);
+        if (!verifyOwnerPassword(req.body?.password, env.EMIS_OWNER_PASSWORD_HASH)) return res.status(401).json({ error: 'كلمة المرور غير صحيحة.', needsLogin: true });
+        const oldSession = sessionClaim(req);
+        if (oldSession) store.deleteSession(oldSession.token);
+        const session = store.createSession({ provider: 'cloud-owner', name: 'صاحب المدرسة' }, SESSION_TTL);
+        store.deleteSecret('cloud-owner-login-attempts');
+        setSessionCookie(req, res, session);
+        res.json({ success: true, expiresAt: session.expiresAt, ownerAccess: true, cloudAccess: true });
     }));
 
-    router.post('/microsoft/disconnect', localOnly, safe(async (req, res) => {
+    router.post('/microsoft/start', requireOwner, safe(async (req, res) => {
+        await bridge.open({ refresh: true });
+        res.json({ success: true, ministry: bridge.getStatus(), ...(cloudMode ? { browserView: true } : {}) });
+    }));
+
+    router.post('/microsoft/disconnect', requireOwner, safe(async (req, res) => {
         store.clearSessions();
+        res.clearCookie(COOKIE, cookieOptions(req));
         await bridge.disconnect();
         res.json({ success: true });
     }));
 
-    router.post('/pairing/start', localOnly, (req, res) => {
+    router.post('/pairing/start', requireOwner, (req, res) => {
         if (!origin || LOOPBACK_HOSTS.has(origin.hostname)) return res.status(409).json({ error: 'حدّد APP_ORIGIN بعنوان وصول الهاتف أولًا، وشغّل الخادم على الشبكة المحلية.' });
         const code = String(randomInt(0, 100_000_000)).padStart(8, '0');
         const expiresAt = store.createPairing(code);
         failures = [];
-        res.json({ code, expiresAt, phoneUrl: origin.origin });
+        const proof = cloudMode ? signCloudPairing(code, expiresAt, env.EMIS_SESSION_SECRET) : undefined;
+        res.json({ code, expiresAt, ...(proof ? { proof } : {}), phoneUrl: cloudMode ? `${requestOrigin(req).origin}/#pair=${encodeURIComponent(proof)}` : origin.origin });
     });
 
     router.post('/pairing/complete', (req, res) => {
+        if (cloudMode && !verifyCloudPairing(req.body?.code, req.body?.proof, env.EMIS_SESSION_SECRET, now())) return res.status(400).json({ error: 'افتح رابط الربط الذي أنشأه مدير البرنامج ثم أدخل الرمز.' });
         failures = failures.filter(time => time > now() - 5 * 60_000);
         if (failures.length >= 10) {
             res.setHeader('Retry-After', '300');
@@ -133,12 +193,12 @@ export function createAuth({ dataDir, env = process.env, store: providedStore, b
             return res.status(400).json({ error: 'رمز الربط غير صحيح أو انتهت صلاحيته.' });
         }
         const session = store.createSession({ provider: 'paired', name: 'جهاز مرتبط بالمدرسة' }, SESSION_TTL);
-        res.cookie(COOKIE, session.token, { ...cookieOptions(req), maxAge: SESSION_TTL });
+        setSessionCookie(req, res, session);
         res.json({ success: true, expiresAt: session.expiresAt });
     });
 
     router.post('/logout', requireAccess, safe(async (req, res) => {
-        store.deleteSession(cookies(req)[COOKIE]);
+        store.deleteSession(sessionClaim(req)?.token);
         res.clearCookie(COOKIE, cookieOptions(req));
         if (req.auth.local) {
             store.clearSessions();
@@ -148,7 +208,7 @@ export function createAuth({ dataDir, env = process.env, store: providedStore, b
     }));
 
     return {
-        router, requireAccess, requireSameOrigin,
+        router, requireAccess, requireSameOrigin, requireOwner, bridge,
         getMinistryCredentials: () => bridge.getCredentials(),
         invalidateMinistryCredentials: () => bridge.invalidate(),
         getAssistantApiKey: () => store.getSecret('groq-api-key'),

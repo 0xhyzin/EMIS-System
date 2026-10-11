@@ -103,6 +103,7 @@ const summary = employee => ({
 
 function owner(req) {
     if (req.auth?.local) return 'local';
+    if (/^[a-f0-9]{64}$/.test(req.auth?.sessionKey || '')) return req.auth.sessionKey;
     const token = (req.headers.cookie || '').split(';').map(part => part.trim()).find(part => part.startsWith('emis_session='))?.slice('emis_session='.length);
     if (!req.auth || !/^[\w-]{43}$/.test(token || '')) throw bad('انتهت جلسة الجهاز. أعد الربط.', 401);
     return createHash('sha256').update(token).digest('hex');
@@ -395,14 +396,14 @@ export function createAssistantRouter({ provider, getApiKey = () => null, setApi
         res.json({ ...status, configured, model: status.model || provider.model || null });
     }));
     router.put('/settings', guard(async (req, res) => {
-        if (!req.auth?.local) throw bad('إعداد مفتاح المساعد متاح من الكمبيوتر الأساسي فقط.', 403);
+        if (!req.auth?.local && !req.auth?.owner) throw bad('إعداد مفتاح المساعد متاح لمدير البرنامج فقط.', 403);
         const apiKey = req.body?.apiKey;
         if (typeof apiKey !== 'string' || apiKey.trim().length < 12 || apiKey.length > 500 || /\s/.test(apiKey.trim())) throw bad('مفتاح API غير صحيح. انسخه كما هو من مزوّد الخدمة.');
         setApiKey(apiKey.trim());
         res.json({ success: true, configured: true });
     }));
     router.delete('/settings', guard(async (req, res) => {
-        if (!req.auth?.local) throw bad('حذف مفتاح المساعد متاح من الكمبيوتر الأساسي فقط.', 403);
+        if (!req.auth?.local && !req.auth?.owner) throw bad('حذف مفتاح المساعد متاح لمدير البرنامج فقط.', 403);
         deleteApiKey();
         res.json({ success: true, configured: false });
     }));

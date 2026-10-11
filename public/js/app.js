@@ -9,6 +9,7 @@ import { consumeSyncStream } from './syncStream.js';
 import { mountUnifiedEmailEditor } from './unifiedEmailEditor.js';
 import { mountAssistantChat } from './assistantChat.js';
 import { exportFormatInfo, createReportExport } from './api.js';
+import { mountCloudBrowser } from './cloudBrowser.js';
 
 const $ = id => document.getElementById(id);
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -42,23 +43,45 @@ state.signatures = normalizeSignatures();
 let uiIdSequence = 0;
 const uiId = () => `column-${Date.now()}-${++uiIdSequence}`;
 const preferenceKey = 'school-register.report.v2';
-let authPoll, reportTimer;
+let authPoll, reportTimer, lastInteractionAt = Date.now();
+let pairingProof = location.hash.startsWith('#pair=') ? decodeURIComponent(location.hash.slice(6)) : '';
+if (pairingProof) history.replaceState(null, '', `${location.pathname}${location.search}`);
+for (const event of ['pointerdown', 'keydown', 'wheel']) document.addEventListener(event, () => { lastInteractionAt = Date.now(); }, { passive: true });
+window.addEventListener('focus', () => { lastInteractionAt = Date.now(); });
 
 async function request(path, options = {}) {
-  const response = await fetch(`/api${path}`, { credentials: 'same-origin', ...options, headers: { ...(options.body && !(options.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}), ...options.headers } });
+  const retryable = !options.method || options.method.toUpperCase() === 'GET';
+  let response;
+  for (let attempt = 0; attempt < (retryable ? 3 : 1); attempt++) {
+    try {
+      response = await fetch(`/api${path}`, { credentials: 'same-origin', ...options, headers: { ...(options.body && !(options.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}), ...options.headers } });
+      if (!retryable || ![502, 503, 504].includes(response.status) || attempt === 2) break;
+      await response.body?.cancel();
+    } catch (error) { if (!retryable || attempt === 2 || options.signal?.aborted) throw error; }
+    await new Promise((resolve, reject) => {
+      const signal = options.signal;
+      const cancel = () => { clearTimeout(timer); reject(new DOMException('Aborted', 'AbortError')); };
+      const timer = setTimeout(() => { signal?.removeEventListener('abort', cancel); resolve(); }, 800 * (attempt + 1));
+      if (signal?.aborted) cancel(); else signal?.addEventListener('abort', cancel, { once: true });
+    });
+    if (options.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+  }
   if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    if (response.status === 401 && error.needsPairing) showPairing();
-    throw new Error(error.error || error.message || 'تعذر الاتصال بالخادم. حاول مرة أخرى.');
+    const data = await response.json().catch(() => ({}));
+    if (response.status === 401 && data.needsLogin) showLogin();
+    else if (response.status === 401 && data.needsPairing) showPairing();
+    const error = new Error(data.error || data.message || 'تعذر الاتصال بالخادم. حاول مرة أخرى.');
+    error.status = response.status;
+    throw error;
   }
   return response.status === 204 ? null : response.json();
 }
 async function verifyAppVersion() {
   let version;
   try { version = await request('/version', { cache: 'no-store' }); }
-  catch { throw new Error('تعذر التأكد من إصدار البرنامج. أوقف التشغيل القديم وشغّل النسخة المحدّثة من نفس المجلد ثم حدّث الصفحة.'); }
+  catch { throw new Error('تعذر الاتصال بالبرنامج. انتظر قليلًا ثم أعد تحميل الصفحة.'); }
   if (version.version !== APP_VERSION || !version.completeEmployeeEditor || !version.syncModes?.includes('full')) {
-    const message = 'ملفات الواجهة والبرنامج من إصدارين مختلفين. أوقف البرنامج، واستبدل ملفات التحديث كلها، ثم شغّله مجددًا وحدّث الصفحة.';
+    const message = 'البرنامج اتحدّث، وهذه الصفحة تعرض إصدارًا قديمًا. أعد تحميل الصفحة للحصول على آخر تحديث.';
     $('global-error').textContent = message; $('global-error').hidden = false;
     throw new Error(message);
   }
@@ -487,35 +510,71 @@ $('export-word').addEventListener('click', async event => {
   } finally { state.exporting = false; renderExportChoice(); }
 });
 
+function clearSessionData() {
+  assistantChat.clearHistory(); state.employees = []; state.school = {}; state.configs = []; state.customLists = []; state.customListId = null; state.hourlyOptions = structuredClone(DEFAULT_HOURLY_OPTIONS); state.hourlyOptionsDirty = false;
+  renderCustomLists(); renderEmployees(); renderReport(); renderConfigs();
+  for (const id of ['stat-total', 'stat-core', 'stat-seconded', 'stat-manual', 'nav-count', 'tab-count']) $(id).textContent = '—';
+  for (const id of ['school-name', 'edara-name', 'mudria-name']) $(id).value = '';
+  $('sidebar-school').textContent = 'إدارة بيانات المدرسة'; $('sidebar-connection').textContent = 'سجّل الدخول لعرض بيانات المدرسة';
+  $('result-summary').textContent = 'سجّل الدخول لعرض السجل';
+  $('empty-state').hidden = true;
+}
 async function refreshAuth() {
-  const before = state.auth?.ministry?.connected; const wasAuthenticated = state.auth?.authenticated; state.auth = await request('/auth/status'); const { ministry, localAccess, authenticated } = state.auth;
-  if (!authenticated) { if (wasAuthenticated) assistantChat.clearHistory(); state.employees = []; state.school = {}; state.configs = []; state.customLists = []; state.customListId = null; state.hourlyOptions = structuredClone(DEFAULT_HOURLY_OPTIONS); state.hourlyOptionsDirty = false; renderCustomLists(); renderEmployees(); renderReport(); renderConfigs(); for (const id of ['stat-total','stat-core','stat-seconded','stat-manual','nav-count','tab-count']) $(id).textContent = '—'; showPairing(); return; }
+  const before = state.auth?.ministry?.connected; state.auth = await request('/auth/status'); const { ministry, localAccess, ownerAccess, cloudAccess, authenticated } = state.auth;
+  if (!authenticated) { clearSessionData(); if (state.auth.needsLogin && !pairingProof) showLogin(); else showPairing(); return; }
+  const canManage = localAccess || ownerAccess;
   $('auth-badge').textContent = ministry?.connected ? 'متصل بالوزارة' : 'غير متصل'; $('auth-badge').classList.toggle('connected', !!ministry?.connected);
   $('auth-message').textContent = ministry?.message || 'يمكنك استخدام البيانات المحفوظة وإضافة الموظفين يدويًا.';
-  $('sidebar-connection').textContent = ministry?.connected ? 'حساب الوزارة متصل' : 'بيانات محفوظة على جهازك';
-  $('microsoft-login').hidden = !localAccess; $('pair-device').hidden = !localAccess;
-  $('microsoft-login').disabled = !state.auth.browserAvailable || ['opening', 'waiting'].includes(ministry?.status);
-  if (localAccess && !state.auth.browserAvailable) $('auth-message').textContent = 'ثبّت Chrome أو Edge أو Chromium على الكمبيوتر، ثم أعد تشغيل البرنامج للربط بموقع الوزارة.';
+  $('sidebar-connection').textContent = ministry?.connected ? 'حساب الوزارة متصل' : cloudAccess ? 'بيانات المدرسة محفوظة على الاستضافة' : 'بيانات محفوظة على جهازك';
+  $('microsoft-login').hidden = !canManage; $('pair-device').hidden = !canManage;
+  $('microsoft-login').disabled = !state.auth.browserAvailable || ministry?.status === 'opening' || (!cloudAccess && ministry?.status === 'waiting');
+  $('microsoft-login').lastChild.textContent = cloudAccess && ['waiting', 'connected'].includes(ministry?.status) ? 'فتح نافذة الوزارة' : 'تسجيل الدخول بـ Microsoft';
+  if (canManage && !state.auth.browserAvailable) $('auth-message').textContent = cloudAccess ? 'متصفح الوزارة غير متاح على الاستضافة حاليًا. بيانات المدرسة المحفوظة متاحة للاستخدام.' : 'ثبّت Chrome أو Edge أو Chromium على الكمبيوتر، ثم أعد تشغيل البرنامج للربط بموقع الوزارة.';
   $('logout').hidden = false;
-  $('logout').textContent = localAccess ? 'فصل الحساب والأجهزة' : 'تسجيل خروج هذا الجهاز';
+  $('logout').textContent = localAccess && !cloudAccess ? 'فصل الحساب والأجهزة' : 'تسجيل خروج هذا الجهاز';
+  $('disconnect-ministry').hidden = !cloudAccess || !ownerAccess || !ministry?.connected;
   $('pair-device').disabled = !state.auth.pairingAvailable;
-  $('phone-addresses').innerHTML = state.auth.phoneUrl ? `عنوان الدخول من نفس الشبكة:<a class="phone-address" href="${escape(state.auth.phoneUrl)}" target="_blank" rel="noopener">${escape(state.auth.phoneUrl)}</a>` : localAccess ? 'لتفعيل الموبايل: شغّل البرنامج بالأمر npm run start:lan، ثم افتح العنوان الظاهر هنا.' : 'هذا الجهاز مرتبط بالكمبيوتر. تُدار إعدادات الربط من الكمبيوتر الرئيسي.';
+  $('ministry-session-note').textContent = cloudAccess ? 'تفتح صفحة الوزارة الرسمية داخل نافذة على الموقع. تُحفظ جلسة الوزارة على الاستضافة، وقد تطلب Microsoft الدخول مجددًا عند انتهاء صلاحيتها.' : 'يتم الربط أول مرة في نافذة متصفح على الكمبيوتر. تُحفظ الجلسة على الجهاز، وقد تطلب Microsoft تسجيل الدخول مجددًا عند انتهاء صلاحيتها.';
+  $('phone-access-note').textContent = cloudAccess ? 'افتح نفس رابط الموقع من الموبايل أو أي جهاز، ثم سجّل بكلمة مرور المدرسة. يمكنك أيضًا ربط جهاز برمز مؤقت.' : 'افتح عنوان الكمبيوتر من موبايل على نفس الشبكة، ثم اربط الجهاز برمز مؤقت.';
+  const phoneUrl = cloudAccess ? state.auth.phoneUrl || location.origin : state.auth.phoneUrl;
+  $('phone-addresses').innerHTML = phoneUrl ? `${cloudAccess ? 'رابط المدرسة لجميع الأجهزة:' : 'عنوان الدخول من نفس الشبكة:'}<a class="phone-address" href="${escape(phoneUrl)}" target="_blank" rel="noopener">${escape(phoneUrl)}</a>` : localAccess ? 'لتفعيل الموبايل: شغّل البرنامج بالأمر npm run start:lan، ثم افتح العنوان الظاهر هنا.' : 'هذا الجهاز مرتبط بالكمبيوتر. تُدار إعدادات الربط من الكمبيوتر الرئيسي.';
+  $('assistant-key-save-note').textContent = cloudAccess ? 'احفظيه مرة واحدة على الاستضافة. قد تخضع الخطة المجانية لحدود استخدام.' : 'احفظيه مرة واحدة على الكمبيوتر الرئيسي. قد تخضع الخطة المجانية لحدود استخدام.';
   if (before === false && ministry?.connected) { toast('تم ربط حساب الوزارة. يمكنك مزامنة العاملين الآن.'); }
+}
+function showLogin() {
+  if ($('cloud-login-form')) return;
+  cloudBrowser.close(false); clearSessionData();
+  modal('أهلاً بك في دفتر المدرسة', '<form id="cloud-login-form"><div class="modal-body cloud-login-body"><p>سجّل الدخول لعرض سجل المدرسة والكشوف.</p><label for="cloud-login-password">كلمة مرور المدرسة</label><input id="cloud-login-password" name="password" type="password" autocomplete="current-password" required maxlength="256" dir="ltr" autofocus><p class="muted">يتذكر هذا الجهاز الدخول لمدة ٣٠ يومًا، حتى تسجّل الخروج أو تنتهي الجلسة.</p><p id="cloud-login-error" class="danger" role="alert"></p></div><div class="modal-footer"><button type="button" id="use-pairing-code" class="button secondary">لدي رمز ربط جهاز</button><button type="submit" class="button primary">الدخول إلى المدرسة</button></div></form>', { required: true });
+  $('use-pairing-code').addEventListener('click', showPairing);
+  $('cloud-login-form').addEventListener('submit', async event => {
+    event.preventDefault(); const button = event.submitter; button.disabled = true; $('cloud-login-error').textContent = '';
+    const password = $('cloud-login-password').value; $('cloud-login-password').value = '';
+    try { await send('/auth/login', 'POST', { password }); $('modal').close(); $('modal-content').innerHTML = ''; await refreshAuth(); await loadData(); if (location.hash === '#assistant') await assistantChat.refreshStatus(); toast('تم تسجيل الدخول.'); }
+    catch (error) { if ($('cloud-login-error')) $('cloud-login-error').textContent = error.message; else toast(error.message, true); }
+    finally { button.disabled = false; }
+  });
 }
 function showPairing() {
   if ($('pair-form')) return;
-  modal('ربط هذا الجهاز بالمدرسة', '<form id="pair-form"><div class="modal-body"><p>من الكمبيوتر الرئيسي، افتح «الربط والإعدادات» ثم «إنشاء رمز ربط جهاز».</p><label for="pair-input" style="margin-top:20px">رمز الربط المؤقت</label><input id="pair-input" name="code" inputmode="numeric" autocomplete="one-time-code" required maxlength="8" minlength="8" dir="ltr"><p id="pair-error" class="danger" role="alert"></p></div><div class="modal-footer"><button type="submit" class="button primary">ربط الجهاز والدخول</button></div></form>', { required: true });
+  const cloud = state.auth?.cloudAccess;
+  modal('ربط هذا الجهاز بالمدرسة', `<form id="pair-form"><div class="modal-body"><p>${cloud ? 'اطلب من مدير البرنامج إنشاء رمز من «الربط والإعدادات» على جهاز مسجّل الدخول.' : 'من الكمبيوتر الرئيسي، افتح «الربط والإعدادات» ثم «إنشاء رمز ربط جهاز».'}</p><label for="pair-input" style="margin-top:20px">رمز الربط المؤقت</label><input id="pair-input" name="code" inputmode="numeric" autocomplete="one-time-code" required maxlength="8" minlength="8" dir="ltr"><p id="pair-error" class="danger" role="alert"></p></div><div class="modal-footer">${cloud ? '<button type="button" class="button secondary" id="use-school-password">الدخول بكلمة المرور</button>' : ''}<button type="submit" class="button primary">ربط الجهاز والدخول</button></div></form>`, { required: true });
+  $('use-school-password')?.addEventListener('click', showLogin);
   $('pair-form').addEventListener('submit', async event => { event.preventDefault(); const button = event.submitter; button.disabled = true;
-    try { await send('/auth/pairing/complete', 'POST', { code: westernDigits($('pair-input').value).trim() }); $('modal').close(); $('modal-content').innerHTML = ''; await refreshAuth(); await loadData(); toast('تم ربط الجهاز.'); }
+    try { await send('/auth/pairing/complete', 'POST', { code: westernDigits($('pair-input').value).trim(), ...(cloud ? { proof: pairingProof } : {}) }); pairingProof = ''; $('modal').close(); $('modal-content').innerHTML = ''; await refreshAuth(); await loadData(); toast('تم ربط الجهاز.'); }
     catch (error) { $('pair-error').textContent = error.message; } finally { button.disabled = false; }
   });
 }
-$('microsoft-login').addEventListener('click', event => busy(event.currentTarget, async () => { await send('/auth/microsoft/start', 'POST'); await refreshAuth(); toast('أكمل الدخول في نافذة الوزارة ثم افتح قائمة العاملين.'); }));
+$('microsoft-login').addEventListener('click', event => busy(event.currentTarget, async () => { const result = await send('/auth/microsoft/start', 'POST'); await refreshAuth(); if (result.browserView) cloudBrowser.open(); toast('أكمل الدخول في نافذة الوزارة ثم افتح قائمة العاملين.'); }));
 $('logout').addEventListener('click', () => {
-  modal(state.auth?.localAccess ? 'فصل حساب الوزارة' : 'تسجيل خروج الجهاز', `<div class="modal-body"><p>${state.auth?.localAccess ? 'سيتم مسح جلسة الوزارة المحفوظة وإلغاء ربط الأجهزة. بيانات العاملين في قاعدة المدرسة ستبقى محفوظة.' : 'ستحتاج إلى رمز ربط جديد للدخول من هذا الجهاز.'}</p></div>`, { footer: '<button class="button secondary" data-close>إلغاء</button><button class="button danger-button" id="confirm-logout">تسجيل الخروج</button>' });
+  const localLogout = state.auth?.localAccess && !state.auth?.cloudAccess;
+  modal(localLogout ? 'فصل حساب الوزارة' : 'تسجيل خروج الجهاز', `<div class="modal-body"><p>${localLogout ? 'سيتم مسح جلسة الوزارة المحفوظة وإلغاء ربط الأجهزة. بيانات العاملين في قاعدة المدرسة ستبقى محفوظة.' : state.auth?.cloudAccess ? 'سيخرج هذا الجهاز فقط. تظل بيانات المدرسة وحساب الوزارة محفوظة، ويمكنك الدخول مرة أخرى بكلمة المرور أو رمز ربط.' : 'ستحتاج إلى رمز ربط جديد للدخول من هذا الجهاز.'}</p></div>`, { footer: '<button class="button secondary" data-close>إلغاء</button><button class="button danger-button" id="confirm-logout">تسجيل الخروج</button>' });
   $('confirm-logout').addEventListener('click', event => busy(event.currentTarget, async () => { await send('/auth/logout', 'POST'); assistantChat.clearHistory(); $('modal').close(); $('modal-content').innerHTML = ''; await refreshAuth(); toast('تم تسجيل الخروج.'); }));
 });
-$('pair-device').addEventListener('click', event => busy(event.currentTarget, async () => { const result = await send('/auth/pairing/start', 'POST'); $('pair-code').textContent = result.code; $('pair-code').hidden = false; setTimeout(() => { $('pair-code').hidden = true; $('pair-code').textContent = ''; }, Math.max(0, result.expiresAt - Date.now())); }));
+$('disconnect-ministry').addEventListener('click', () => {
+  modal('فصل حساب الوزارة والأجهزة', '<div class="modal-body"><p>سيتم مسح جلسة الوزارة وإلغاء دخول جميع الأجهزة، بما فيها هذا الجهاز. بيانات العاملين والكشوف تبقى محفوظة. ستحتاج إلى كلمة مرور المدرسة ثم ربط الوزارة مجددًا.</p></div>', { footer: '<button class="button secondary" data-close>إلغاء</button><button class="button danger-button" id="confirm-disconnect-ministry">فصل الحساب والأجهزة</button>' });
+  $('confirm-disconnect-ministry').addEventListener('click', event => busy(event.currentTarget, async () => { await send('/auth/microsoft/disconnect', 'POST'); cloudBrowser.close(false); assistantChat.clearHistory(); $('modal').close(); $('modal-content').innerHTML = ''; await refreshAuth(); toast('تم فصل حساب الوزارة والأجهزة.'); }));
+});
+$('pair-device').addEventListener('click', event => busy(event.currentTarget, async () => { const result = await send('/auth/pairing/start', 'POST'); $('pair-code').textContent = result.code; $('pair-code').hidden = false; if (state.auth?.cloudAccess) $('phone-addresses').innerHTML = `افتح الرابط التالي على الجهاز الجديد، ثم أدخل الرمز قبل انتهاء خمس دقائق:<a class="phone-address" href="${escape(result.phoneUrl)}" target="_blank" rel="noopener">رابط ربط الجهاز</a>`; setTimeout(() => { $('pair-code').hidden = true; $('pair-code').textContent = ''; }, Math.max(0, result.expiresAt - Date.now())); }));
 $('school-form').addEventListener('submit', event => { event.preventDefault(); busy(event.submitter, async () => { const result = await send('/school-info', 'PUT', Object.fromEntries(new FormData(event.target))); state.school = result.schoolInfo; $('sidebar-school').textContent = state.school.schoolName || 'إدارة بيانات المدرسة'; renderReport(); toast('تم حفظ بيانات المدرسة.'); }); });
 $('logo-input').addEventListener('change', event => busy(event.target, async () => { const file = event.target.files[0]; if (!file) return; if (file.type !== 'image/png' || file.size > 2 * 1024 * 1024) throw new Error('اختر صورة PNG بحجم لا يتجاوز 2 ميجابايت.'); const data = new FormData(); data.append('logo', file); await request('/upload-logo', { method: 'POST', body: data }); for (const id of ['settings-logo', 'paper-logo']) $(id).src = `/assets/logo.png?v=${Date.now()}`; toast('تم حفظ الشعار.'); }));
 function renderSyncFailures(failures) {
@@ -556,7 +615,8 @@ function chooseSyncMode() {
   form.addEventListener('submit', event => { event.preventDefault(); const mode = form.elements.syncMode.value; const confirmed = $('confirm-full-sync').checked; if (mode === 'full' && !confirmed) return; $('modal').close(); startSync(mode, confirmed); });
 }
 $('sync-button').addEventListener('click', () => { if (!state.auth?.ministry?.connected) { location.hash = 'settings'; toast('اربط حساب الوزارة أولًا، أو افتح تسجيل الدخول لتجديد الجلسة.'); } else chooseSyncMode(); });
-const assistantChat = mountAssistantChat({ request, send, isLocalAccess: () => Boolean(state.auth?.localAccess), getExportFormat: () => state.exportFormat, onDataChanged: loadData, toast });
+const assistantChat = mountAssistantChat({ request, send, isLocalAccess: () => Boolean(state.auth?.localAccess || state.auth?.ownerAccess), getExportFormat: () => state.exportFormat, onDataChanged: loadData, toast });
+const cloudBrowser = mountCloudBrowser({ request, onAuthRequired: () => refreshAuth().catch(() => {}), onClose: () => refreshAuth().catch(() => {}) });
 function navigate() {
   const view = ['employees', 'reports', 'settings', 'assistant'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'employees';
   document.querySelectorAll('.view').forEach(section => { section.hidden = section.id !== `view-${view}`; });
@@ -639,6 +699,9 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) refr
 $('today').textContent = new Intl.DateTimeFormat('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date());
 restorePreferences(); renderSignatures(); renderExportChoice(); renderColumns(); renderFilterRules(); renderSortRules(); navigate();
 try { await verifyAppVersion(); await refreshAuth(); if (state.auth?.authenticated) { await loadData(); if (location.hash === '#assistant') await assistantChat.refreshStatus(); } }
-catch (error) { $('global-error').textContent = `${error.message} أعد تحميل الصفحة بعد التأكد من تشغيل البرنامج.`; $('global-error').hidden = false; }
-authPoll = setInterval(() => { if (!document.hidden && !$('pair-form')) refreshAuth().catch(() => {}); }, 5000);
+catch (error) { $('global-error').textContent = `${error.message} انتظر قليلًا ثم أعد تحميل الصفحة.`; $('global-error').hidden = false; }
+authPoll = setInterval(() => {
+  const activeCloudView = !state.auth?.cloudAccess || cloudBrowser.isOpen || Date.now() - lastInteractionAt < 60_000;
+  if (!document.hidden && activeCloudView && !$('pair-form') && !$('cloud-login-form')) refreshAuth().catch(() => {});
+}, 5000);
 window.addEventListener('pagehide', () => clearInterval(authPoll));

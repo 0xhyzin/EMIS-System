@@ -10,19 +10,47 @@ import { createAssistantRouter } from './routes/assistant.js';
 import { createGroqAssistantProvider } from './utils/assistantProvider.js';
 import multer from 'multer';
 import { APP_VERSION } from './public/js/appVersion.js';
+import { createHash, timingSafeEqual } from 'node:crypto';
+import { createCloudBrowserRouter } from './routes/cloudBrowser.js';
 
 const projectDir = dirname(fileURLToPath(import.meta.url));
 const loopbackHost = host => ['localhost', '127.0.0.1', '[::1]'].includes(host);
 
 export function createApp(options = {}) {
+    const env = options.env || process.env;
+    const cloud = env.EMIS_CLOUD === 'true';
+    if (cloud && (!env.EMIS_PROXY_SECRET || env.EMIS_PROXY_SECRET.length < 32)) throw new Error('Cloud proxy secret is required.');
     initDatabase({ dataDir: options.dataDir });
     const dataDir = dirname(getDatabasePath());
     const app = express();
     app.disable('x-powered-by');
-    const configuredOrigin = options.appOrigin ?? process.env.APP_ORIGIN;
-    const auth = options.auth || createAuth({ dataDir, env: { ...process.env, APP_ORIGIN: configuredOrigin } });
+    const configuredOrigin = options.appOrigin ?? env.APP_ORIGIN;
+    const auth = options.auth || createAuth({ dataDir, env: { ...env, APP_ORIGIN: configuredOrigin } });
     app.locals.auth = auth;
     app.locals.dataDir = dataDir;
+    app.locals.cloudLastActivity = Date.now();
+    app.locals.cloudActiveRequests = 0;
+    if (cloud) {
+        app.set('trust proxy', true);
+        app.use((req, res, next) => {
+            const supplied = req.get('x-emis-proxy-secret');
+            const digest = value => createHash('sha256').update(value).digest();
+            if (typeof supplied !== 'string' || supplied.length > 1024 || !timingSafeEqual(digest(supplied), digest(env.EMIS_PROXY_SECRET))) {
+                return res.status(403).json({ error: 'عنوان الوصول غير مسموح.' });
+            }
+            res.setHeader('Cache-Control', 'private, no-store');
+            if (req.path === '/__health') return res.json({ ready: true, version: APP_VERSION });
+            const publicHost = req.get('x-emis-public-host');
+            if (typeof publicHost !== 'string' || /[\s/@\\?#]/.test(publicHost)) return res.status(403).json({ error: 'عنوان الوصول غير مسموح.' });
+            req.headers.host = publicHost;
+            app.locals.cloudActiveRequests++;
+            let completed = false;
+            const done = () => { if (!completed) { completed = true; app.locals.cloudActiveRequests--; } };
+            res.once('finish', done); res.once('close', done);
+            if (!['/api/auth/status', '/api/version'].includes(req.path)) app.locals.cloudLastActivity = Date.now();
+            next();
+        });
+    }
     let trustedOrigin = null;
     if (configuredOrigin) {
         const parsed = new URL(configuredOrigin);
@@ -37,12 +65,14 @@ export function createApp(options = {}) {
         try { requestOrigin = new URL(`${req.protocol}://${req.get('host')}`).origin; }
         catch { return res.status(400).json({ error: 'عنوان الخادم غير صحيح.' }); }
         const host = new URL(requestOrigin).hostname;
-        const isCanonical = trustedOrigin && new URL(requestOrigin).host === new URL(trustedOrigin).host;
-        if (!loopbackHost(host) && !isCanonical) return res.status(403).json({ error: 'عنوان الوصول غير مسموح. اضبط APP_ORIGIN للوصول من الهاتف.' });
+        const allowedOrigins = [trustedOrigin, ...(cloud && env.EMIS_PREVIEW_ORIGIN ? [new URL(env.EMIS_PREVIEW_ORIGIN).origin] : [])].filter(Boolean);
+        const matchedOrigin = allowedOrigins.find(origin => new URL(requestOrigin).host === new URL(origin).host);
+        const isCanonical = !!matchedOrigin;
+        if ((!loopbackHost(host) || cloud) && !isCanonical) return res.status(403).json({ error: 'عنوان الوصول غير مسموح. اضبط APP_ORIGIN للوصول من الهاتف.' });
         if (req.path.startsWith('/api/')) {
             res.setHeader('Cache-Control', 'no-store');
             const origin = req.get('origin');
-            const expectedOrigin = isCanonical ? trustedOrigin : requestOrigin;
+            const expectedOrigin = matchedOrigin || requestOrigin;
             if ((origin && origin !== expectedOrigin) || req.get('sec-fetch-site') === 'cross-site') return res.status(403).json({ error: 'الطلب يجب أن يأتي من نفس الموقع.' });
         }
         next();
@@ -51,7 +81,9 @@ export function createApp(options = {}) {
     app.use(express.json({ limit: '2mb' }));
     app.get('/api/version', (req, res) => res.json({ version: APP_VERSION, completeEmployeeEditor: true, syncModes: ['normal', 'full'] }));
     app.use('/api/auth', auth.router);
+    if (cloud) app.use('/api/auth/browser', auth.requireAccess, auth.requireSameOrigin, createCloudBrowserRouter({ auth, bridge: auth.bridge }));
     app.use('/api', auth.requireAccess, auth.requireSameOrigin);
+    if (cloud) app.get('/api/deployment/status', (req, res) => res.json({ ready: true, version: APP_VERSION, persistentStorage: true, browserAvailable: !!auth.bridge.browserPath, pdfAvailable: fs.existsSync('/usr/bin/soffice') }));
     const apiRouter = createApiRouter({ getMinistryCredentials: () => auth.getMinistryCredentials(),
         invalidateMinistryCredentials: () => auth.invalidateMinistryCredentials?.(), ...options.apiOptions });
     app.use('/api/assistant', createAssistantRouter({
