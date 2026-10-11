@@ -45,7 +45,9 @@ test('valid owner login forwards original JSON exactly once and restores public 
         req.on('end', () => { received = { headers: req.headers, body: Buffer.concat(chunks).toString() }; res.setHeader('Set-Cookie', 'emis_session=fixture; Path=/; Secure; HttpOnly'); res.end('{"success":true}'); });
     });
     let starts = 0;
-    const port = await listen(t, createVercelHandler({ env, resolveBackend: async () => { starts++; return { origin: 'https://fixture.vercel.run', secret: env.EMIS_PROXY_SECRET }; }, requestImpl: (options, callback) => http.request({ ...options, protocol: 'http:', hostname: '127.0.0.1', port: upstream }, callback) }));
+    const handler = createVercelHandler({ env, resolveBackend: async () => { starts++; return { origin: 'https://fixture.vercel.run', secret: env.EMIS_PROXY_SECRET }; }, requestImpl: (options, callback) => http.request({ ...options, protocol: 'http:', hostname: '127.0.0.1', port: upstream }, callback) });
+    // Vercel can detach the request socket after consuming the login body.
+    const port = await listen(t, (req, res) => handler(new Proxy(req, { get(target, key) { if (key === 'socket') return null; const value = Reflect.get(target, key); return typeof value === 'function' ? value.bind(target) : value; } }), res));
     const response = await call(port, '/api/auth/login', { method: 'POST', body: { password }, headers: { 'x-emis-public-host': 'localhost', 'x-emis-proxy-secret': 'attacker' } });
     assert.equal(response.status, 200); assert.equal(starts, 1);
     assert.deepEqual(JSON.parse(received.body), { password });

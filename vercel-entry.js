@@ -143,12 +143,12 @@ export function createVercelHandler({ env = process.env, requestImpl = httpsRequ
 
         const headers = filteredHeaders(req.headers);
         for (const name of Object.keys(headers)) {
-            if (['forwarded', 'x-emis-proxy-secret', 'x-emis-public-host', 'x-vercel-protection-bypass', 'x-vercel-set-bypass-cookie'].includes(name.toLowerCase()) || name.toLowerCase().startsWith('x-forwarded-')) delete headers[name];
+            if (['forwarded', 'x-emis-proxy-secret', 'x-emis-public-host', 'x-vercel-protection-bypass', 'x-vercel-set-bypass-cookie', 'x-vercel-oidc-token'].includes(name.toLowerCase()) || name.toLowerCase().startsWith('x-forwarded-')) delete headers[name];
         }
         headers.host = req.headers.host;
         headers['x-forwarded-host'] = req.headers.host;
         headers['x-forwarded-proto'] = 'https';
-        headers['x-forwarded-for'] = req.socket.remoteAddress || 'unknown';
+        headers['x-forwarded-for'] = req.socket?.remoteAddress || 'unknown';
         headers['x-emis-proxy-secret'] = backend.secret;
         if (cloud) {
             // The Sandbox edge routes by Host. Public host is restored only after secret validation.

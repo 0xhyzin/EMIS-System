@@ -7,8 +7,9 @@ import { chromium } from 'playwright-core';
 if (process.env.EMIS_CLOUD !== 'true' || !process.env.EMIS_SANDBOX_NAME) throw new Error('Cloud runtime configuration is required.');
 process.env.EMIS_BROWSER_PATH ||= chromium.executablePath();
 const app = createApp();
-const server = app.listen(3000, '0.0.0.0');
-writeFileSync('/tmp/emis-server.pid', String(process.pid), { mode: 0o600 });
+const server = app.listen(3000, '0.0.0.0', () => {
+    writeFileSync('/tmp/emis-server.pid', String(process.pid), { mode: 0o600 });
+});
 let stopping = false;
 async function stop(stopSandbox = false) {
     if (stopping) return;
