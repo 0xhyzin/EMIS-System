@@ -273,7 +273,7 @@ export class MinistryBridge extends EventEmitter {
             this.attemptTimer.unref?.();
         } catch (error) {
             this.status = 'error';
-            this.message = this.cloudMode ? 'تعذر فتح موقع الوزارة الآن. أعد المحاولة بعد قليل.' : 'تعذر فتح موقع الوزارة. تحقق من الإنترنت، ووجود متصفح مدعوم وواجهة سطح مكتب على الكمبيوتر.';
+            this.message = this.cloudMode ? 'تعذر الوصول لموقع الوزارة من شبكة الاستضافة. البيانات المحفوظة والتصدير متاحان؛ لم يكتمل ربط الوزارة.' : 'تعذر فتح موقع الوزارة. تحقق من الإنترنت، ووجود متصفح مدعوم وواجهة سطح مكتب على الكمبيوتر.';
             throw Object.assign(new Error(this.message), { statusCode: 503 });
         }
     }
